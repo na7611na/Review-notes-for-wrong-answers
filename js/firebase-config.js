@@ -5,12 +5,12 @@
 //  데이터 보호는 Firestore 보안 규칙이 담당합니다.)
 // ============================================================
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT",
-  storageBucket: "YOUR_PROJECT.firebasestorage.app",
-  messagingSenderId: "000000000000",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyCWxahZ3K-ihoi-9dPwsa7sfyuqgL3ARRA",
+  authDomain: "review-notes-c9b70.firebaseapp.com",
+  projectId: "review-notes-c9b70",
+  storageBucket: "review-notes-c9b70.firebasestorage.app",
+  messagingSenderId: "863047230299",
+  appId: "1:863047230299:web:0d70813196a7810c3df07e"
 };
 
 // 사용할 Gemini 모델 (앞에서부터 차례로 시도합니다).
