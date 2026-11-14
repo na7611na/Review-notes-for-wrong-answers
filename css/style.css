@@ -483,6 +483,8 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .part-edit { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .part-edit legend { font-weight: 800; padding: 0 6px; }
 /* 짧은 보기는 화면에서도 한 줄에 여러 개 */
-.choices.short { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+/* 짧은 보기는 한 줄에 2개씩 (긴 보기는 한 줄에 1개) */
+.choices.short, .doc-choices.short { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pv-choices.short { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* 시험지 화면 가독성 */
 .exam-item .q-text, .question .q-text { line-height: 1.85; }

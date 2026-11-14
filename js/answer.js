@@ -42,7 +42,7 @@ function singleInput(p, a, o) {
   const attrs = `data-key="${o.key ?? ""}" data-part="${o.part ?? ""}"`;
   if (t === "choice" || o.numbersOnly) {
     const count = o.count || p?.choices?.length || 5;
-    const long = !o.numbersOnly && Math.max(...p.choices.map(choiceLen)) > 8;
+    const long = !o.numbersOnly && !isShortChoices(p.choices);
     return `<div class="choices ${o.numbersOnly ? "nums" : long ? "" : "short"}">${Array.from({ length: count }, (_, i) => {
       let cls = "";
       if (o.checked && p) cls = i === p.answer ? "correct" : i === a.selected ? "wrong" : "dim";
@@ -80,7 +80,7 @@ export function answerInput(p, a, o = {}) {
 // 읽기 전용: 소문항 목록 (문서 보기·종이 채점용)
 export function partsHtml(p) {
   return `<ol class="parts-view">${p.parts.map((q, i) => `<li><b>${esc(partLabel(q, i))}</b> <span>${esc(q.question)}</span>
-    ${typeOf(q) === "choice" ? `<div class="pv-choices">${q.choices.map((c, j) => `<span>${NUM[j]} ${esc(c)}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
+    ${typeOf(q) === "choice" ? `<div class="pv-choices ${isShortChoices(q.choices) ? "short" : ""}">${q.choices.map((c, j) => `<span>${NUM[j]} ${esc(c)}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
 }
 
 /** 소문항별 자동 채점 결과 */
@@ -130,6 +130,9 @@ export function bindAnswers(root, getA, { getP, onChange, onSubmit } = {}) {
     };
   });
 }
+
+// 화면에서 보기를 한 줄에 2개씩 놓아도 될 만큼 짧은지
+export const isShortChoices = (choices) => Math.max(...choices.map(choiceLen)) <= 10;
 
 // 보기 글자 길이 (수식 기호 제외) — 인쇄·화면에서 한 줄에 몇 개 놓을지 정할 때 씀
 export function choiceLen(c) {

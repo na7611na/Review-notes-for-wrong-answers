@@ -3,7 +3,7 @@ import { unitsFor, findUnit, drawProblems } from "./bank.js";
 import * as DB from "./db.js";
 import { initAI, analyzeProblem, moreProblems, cleanProblem, problemTextOf, correctAnswerOf } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
-import { typeOf, isMulti, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
+import { typeOf, isMulti, isShortChoices, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
 import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
 import { openCropper } from "./cropper.js";
 import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
@@ -437,7 +437,7 @@ function docHtml(o, figure = false) {
   return `<p class="doc-q">${esc(o.question)}</p>
     ${figure ? `<div class="doc-fig" id="figBox"><div class="spinner small"></div></div>` : ""}
     ${isMulti(o) ? partsHtml(o) : ""}
-    ${typeOf(o) === "choice" ? `<ol class="doc-choices">${o.choices.map((c, i) => `<li><span>${"①②③④⑤"[i]}</span>${esc(c)}</li>`).join("")}</ol>` : ""}
+    ${typeOf(o) === "choice" ? `<ol class="doc-choices ${isShortChoices(o.choices) ? "short" : ""}">${o.choices.map((c, i) => `<li><span>${"①②③④⑤"[i]}</span>${esc(c)}</li>`).join("")}</ol>` : ""}
     ${o.hasFigure && !figure ? `<p class="warn small">그림이 있는 문제예요. 그림은 아래 원본 사진에서 확인해요.</p>` : ""}`;
 }
 
