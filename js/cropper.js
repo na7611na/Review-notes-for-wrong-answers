@@ -21,13 +21,13 @@ function rotate(c) {
 }
 
 /** 자른 사진(canvas)을 돌려준다. 취소하면 null */
-export function openCropper(source) {
+export function openCropper(source, { title = "✂️ 문제 하나만 남기기", hint = "모서리를 끌어 틀린 문제만 상자 안에 넣어 주세요. 주변 문제는 잘라 내요." } = {}) {
   return new Promise((resolve) => {
     let result = null;
     let src = toCanvas(source);
     const m = modal(`
-      <h3>✂️ 문제 하나만 남기기</h3>
-      <p class="muted center small">모서리를 끌어 틀린 문제만 상자 안에 넣어 주세요. 주변 문제는 잘라 내요.</p>
+      <h3>${title}</h3>
+      <p class="muted center small">${hint}</p>
       <div class="crop-stage"><div class="crop-wrap"><img alt="" draggable="false"><div class="crop-box"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div></div>
       <div class="btn-row crop-tools">
         <button class="btn small" data-rotate>↻ 회전</button>

@@ -1,9 +1,9 @@
 import { SUBJECTS, SUBJECT_KEYS, GRADES, BANDS, bandOf, REASONS, ENCOURAGE, PRAISE, pick } from "./data.js";
 import { unitsFor, findUnit, drawProblems } from "./bank.js";
 import * as DB from "./db.js";
-import { initAI, analyzeProblem, moreProblems, cleanProblem, problemTextOf, correctAnswerOf } from "./ai.js";
+import { initAI, analyzeProblem, moreProblems, cleanProblem, problemTextOf, correctAnswerOf, refineFigure } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
-import { typeOf, isMulti, isShortChoices, richText, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
+import { typeOf, isMulti, isShortChoices, richText, figureHtml, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
 import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
 import { openCropper } from "./cropper.js";
 import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
@@ -39,17 +39,63 @@ const aiFields = (r) => ({
 });
 
 // AI가 알려 준 그림 영역([ymin, xmin, ymax, xmax], 0~1000)만 사진에서 잘라낸다
-async function cropFigure(src, box) {
-  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+// box([ymin, xmin, ymax, xmax], 0~1000)에 pad만큼 여유를 두고 잘라 canvas로
+function cropCanvas(img, box, pad) {
+  const W = img.width, H = img.height;
   const [y0, x0, y1, x1] = box.map((v) => Math.min(1000, Math.max(0, v)) / 1000);
-  const pad = 0.015;
-  const sx = Math.max(0, x0 - pad) * img.width, sy = Math.max(0, y0 - pad) * img.height;
-  const sw = Math.min(1, x1 + pad) * img.width - sx, sh = Math.min(1, y1 + pad) * img.height - sy;
+  const sx = Math.max(0, x0 - pad) * W, sy = Math.max(0, y0 - pad) * H;
+  const sw = Math.min(1, x1 + pad) * W - sx, sh = Math.min(1, y1 + pad) * H - sy;
   if (sw < 20 || sh < 20) return null;
   const c = document.createElement("canvas");
   c.width = Math.round(sw); c.height = Math.round(sh);
   c.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
-  return c.toDataURL("image/jpeg", 0.85);
+  return c;
+}
+// 색깔(R,G,B)마다 어두운 쪽(잉크)·밝은 쪽(종이) 값을 찾는다
+function inkAndPaper(px) {
+  return [0, 1, 2].map((j) => {
+    const v = [];
+    for (let i = j; i < px.length; i += 16) v.push(px[i]);
+    v.sort((a, b) => a - b);
+    return [v[Math.floor(v.length * 0.02)], v[Math.floor(v.length * 0.85)]];
+  });
+}
+// 스캔한 것처럼: 종이는 하얗게(색깔마다 따로 맞춰 누런 기 없이), 선은 또렷하게
+function scanClean(c) {
+  const ctx = c.getContext("2d"), d = ctx.getImageData(0, 0, c.width, c.height), px = d.data;
+  const lv = inkAndPaper(px);
+  if (lv.some(([ink, paper]) => paper - ink < 50)) return c; // 대비가 너무 낮으면 그대로
+  for (let i = 0; i < px.length; i += 4) for (let j = 0; j < 3; j++) {
+    const [ink, paper] = lv[j];
+    px[i + j] = Math.max(0, Math.min(255, ((px[i + j] - ink) * 255) / (paper - ink)));
+  }
+  ctx.putImageData(d, 0, 0);
+  return c;
+}
+// 학생 손글씨 영역(0~1000)을 종이 색으로 덮는다
+function eraseMarks(c, marks) {
+  if (!marks.length) return;
+  const ctx = c.getContext("2d");
+  const paper = inkAndPaper(ctx.getImageData(0, 0, c.width, c.height).data).map(([, p]) => p);
+  ctx.fillStyle = `rgb(${paper.join(",")})`;
+  marks.forEach(([y0, x0, y1, x1]) => {
+    const pad = 0.008;
+    ctx.fillRect((x0 / 1000 - pad) * c.width, (y0 / 1000 - pad) * c.height, ((x1 - x0) / 1000 + 2 * pad) * c.width, ((y1 - y0) / 1000 + 2 * pad) * c.height);
+  });
+}
+async function cropFigure(src, box) {
+  const img = await loadImg(src);
+  // 1) 넉넉하게 잘라서 2) AI가 인쇄된 그림 영역과 학생 손글씨를 찾고
+  // 3) 손글씨를 종이 색으로 덮은 뒤 4) 그림만 꽉 맞게 다시 잘라 스캔처럼 정리
+  let c = cropCanvas(img, box, 0.04);
+  if (!c) return null;
+  try {
+    const { box: tight, marks } = await refineFigure(c.toDataURL("image/jpeg", 0.9).split(",")[1]);
+    eraseMarks(c, marks);
+    if (tight) { const loose = await loadImg(c.toDataURL("image/png")); c = cropCanvas(loose, tight, 0.01) || c; }
+  } catch (e) { console.warn("그림 다듬기 실패, 처음 영역 사용", e); c = cropCanvas(img, box, 0.01) || c; }
+  return scanClean(c).toDataURL("image/jpeg", 0.88);
 }
 
 // 사진을 AI로 분석해 오답노트에 저장할 값 + 잘라낸 그림을 돌려준다 (실패하면 예외)
@@ -433,12 +479,15 @@ function pickBankUnit(subject, message, allowNone = false) {
 
 // ---------------------------------------------------------- 오답 상세
 // AI가 옮겨 쓴 문제를 문서처럼 보여 준다
-function docHtml(o, figure = false) {
+function docHtml(o, n) {
   return `<div class="doc-q">${richText(o.question)}</div>
-    ${figure ? `<div class="doc-fig" id="figBox"><div class="spinner small"></div></div>` : ""}
+    ${o.hasFigure ? `<div class="doc-fig">
+      ${n.hasFigureImg ? `<div id="figBox"><div class="spinner small"></div></div>` : ""}
+      <button class="btn small" id="recropFig">✂️ 그림 ${n.hasFigureImg ? "다시 자르기" : "잘라 넣기"}</button>
+    </div>` : ""}
     ${isMulti(o) ? partsHtml(o) : ""}
     ${typeOf(o) === "choice" ? `<ol class="doc-choices ${isShortChoices(o.choices) ? "short" : ""}">${o.choices.map((c, i) => `<li><span>${"①②③④⑤"[i]}</span>${esc(c)}</li>`).join("")}</ol>` : ""}
-    ${o.hasFigure && !figure ? `<p class="warn small">그림이 있는 문제예요. 그림은 아래 원본 사진에서 확인해요.</p>` : ""}`;
+`;
 }
 
 async function renderNote(id) {
@@ -456,7 +505,7 @@ async function renderNote(id) {
 
     ${n.original ? `<section class="card doc">
       <h3>📄 다시 입력한 문제 <small class="muted">채점 표시 없이 · 맞춤형 문제에 저장됨</small><span class="h3-tools"><button class="btn small" id="reAI2">🔄 다시 분석</button><button class="btn small" id="editDoc">✏️ 고치기</button></span></h3>
-      ${docHtml(n.original, n.hasFigureImg)}
+      ${docHtml(n.original, n)}
       <details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(correctAnswerOf(n.original))}</p></details>
       <details class="fold" id="origFold"><summary>📸 원본 사진 보기</summary><div class="photo-preview" id="photo"><img src="${n.thumb}" alt="문제 사진" class="blur"></div></details>
     </section>` : `<section class="card">
@@ -497,7 +546,22 @@ async function renderNote(id) {
   });
   const fold = $app.querySelector("#origFold");
   if (fold) fold.addEventListener("toggle", () => fold.open && showPhoto(), { once: true }); else showPhoto();
-  if (n.hasFigureImg) DB.getFigure(state.uid, id).then((img) => { const b = $app.querySelector("#figBox"); if (b) b.innerHTML = img ? `<img src="${img}" alt="그림">` : ""; });
+  if (n.hasFigureImg) DB.getFigure(state.uid, id).then((img) => { const b = $app.querySelector("#figBox"); if (b) b.innerHTML = img ? figureHtml({ img }) : ""; });
+  // 그림을 원본 사진에서 직접 다시 자른다 (손글씨·주변 글자를 빼고 싶을 때)
+  $app.querySelector("#recropFig")?.addEventListener("click", async () => {
+    const src = await DB.getImage(state.uid, id);
+    if (!src) return toast("사진을 불러오지 못했어요.");
+    const cut = await openCropper(await loadImg(src), { title: "✂️ 그림만 남기기", hint: "모서리를 끌어 그림만 상자 안에 넣어요. 문제 글이나 손글씨는 빼면 깨끗해져요." });
+    if (!cut) return;
+    loading(true, "그림을 정리하는 중…");
+    try {
+      await DB.saveFigure(state.uid, id, scanClean(cut).toDataURL("image/jpeg", 0.88));
+      if (!n.hasFigureImg) { await DB.updateNote(state.uid, id, { hasFigureImg: true }); n.hasFigureImg = true; }
+      forgetImage(id);
+      toast("그림을 바꿨어요 ✨");
+    } catch (e) { toast("저장하지 못했어요: " + e.message); }
+    loading(false); renderNote(id);
+  });
   $app.querySelector("#editDoc")?.addEventListener("click", () => editDocument(n));
 
   $app.querySelector("#chChapter").onclick = () => {
@@ -687,6 +751,7 @@ async function renderPractice(id) {
     </div>
     <section class="card question" style="${subjVars(n.subject)}">
       <div class="q-text">${richText(q.question)}</div>
+      ${n.original?.hasFigure && n.hasFigureImg ? `<div class="q-fig-orig" id="origFig"></div>` : ""}
       ${answerInput(q, p.a, { checked: p.checked, partResults: p.checked && isMulti(q) ? gradeParts(q, p.a) : null })}
       ${p.checked ? `<div class="feedback ${r === true ? "ok" : r === false ? "no" : "neutral"}">
         <b>${isMulti(q)
@@ -703,6 +768,11 @@ async function renderPractice(id) {
     </button>
   `);
   const act = $app.querySelector("#act");
+  // 그림이 있는 문제는 원래 문제 그림을 함께 보여 준다 (숫자는 문제 글을 따름)
+  const origFig = $app.querySelector("#origFig");
+  if (origFig) DB.getFigure(state.uid, n.id).then((img) => {
+    if (img) origFig.innerHTML = figureHtml({ img }) + `<p class="muted small center">원래 문제의 그림이에요. 숫자는 문제 글을 따라요.</p>`;
+  });
   if (!p.checked) {
     // 객관식을 고르거나 답을 쓰면 버튼만 켠다 (다시 그리지 않아 입력 중인 칸이 그대로)
     bindAnswers($app, () => p.a, {

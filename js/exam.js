@@ -6,7 +6,7 @@
 import { SUBJECTS, SUBJECT_KEYS } from "./data.js";
 import * as DB from "./db.js";
 import { $app, state, esc, go, fmtDate, toast, loading, layout, subjChip, subjVars, noteById, confirmBox } from "./ui.js";
-import { NUM, TYPE_LABEL, typeOf, isMulti, richText, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers, choiceLen } from "./answer.js";
+import { NUM, TYPE_LABEL, typeOf, isMulti, richText, figureHtml, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers, choiceLen } from "./answer.js";
 
 // 단원 이름 (학년·학기를 골랐으면 "중1-1 · 일차방정식")
 export const chapterOf = (n) => { const c = (n.chapter || n.unit || "단원 미정").trim(); return n.term && n.chapter ? `${n.term} · ${c}` : c; };
@@ -35,7 +35,7 @@ const gradeTarget = (it) => it.o || { type: "short", answer: "" };
 
 function questionHtml(it) {
   if (it.image) return `<img class="ei-img" src="${it.image}" alt="문제">`;
-  return `<div class="q-text">${richText(it.o.question)}</div>${it.figure ? `<img class="ei-fig" src="${it.figure}" alt="그림">` : ""}`;
+  return `<div class="q-text">${richText(it.o.question)}</div>${figureHtml({ img: it.figure, cls: "ei-fig" })}`;
 }
 
 // ---------------------------------------------------------- 목록
@@ -292,9 +292,9 @@ export async function renderPrint(id) {
     const o = it.o;
     let body;
     if (it.image) body = `<img class="p-photo" src="${it.image}" alt="">`;
-    else if (isMulti(o)) body = `<div class="p-stem">${richText(o.question)}</div>${it.figure ? `<img class="p-fig" src="${it.figure}" alt="">` : ""}
+    else if (isMulti(o)) body = `<div class="p-stem">${richText(o.question)}</div>${figureHtml({ img: it.figure, cls: "p-fig" })}
       ${o.parts.map((q) => `<div class="p-part"><div class="p-stem"><b class="p-pl">${esc(q.label)}</b> ${richText(q.question)}</div>${pAnswerArea(q)}</div>`).join("")}`;
-    else body = `<div class="p-stem">${richText(o.question)}</div>${it.figure ? `<img class="p-fig" src="${it.figure}" alt="">` : ""}${pAnswerArea(o)}`;
+    else body = `<div class="p-stem">${richText(o.question)}</div>${figureHtml({ img: it.figure, cls: "p-fig" })}${pAnswerArea(o)}`;
     if (it.image && typeOf(o) !== "choice") body += pShort();
     return `<section class="p-item">
       <div class="p-num">${i + 1}</div>
