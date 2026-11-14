@@ -9,6 +9,20 @@ export const go = (hash) => { if (location.hash === hash) window.dispatchEvent(n
 export const fmtDate = (t) => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일`; };
 export const noteById = (id) => state.notes.find((n) => n.id === id);
 
+// ---------- 수식: $...$ 안의 LaTeX를 교과서 모양(분수꼴 등)으로 바꿔 그린다
+export function renderMath(root = document.body) {
+  if (!window.renderMathInElement) return;
+  window.renderMathInElement(root, {
+    delimiters: [{ left: "$", right: "$", display: false }],
+    throwOnError: false,
+    macros: { "\\frac": "\\dfrac" }, // 분수를 작게 줄이지 않고 교과서 크기로
+  });
+}
+// 화면·팝업이 바뀔 때마다 새로 생긴 수식을 그린다
+let mathTimer = null;
+new MutationObserver(() => { clearTimeout(mathTimer); mathTimer = setTimeout(() => renderMath(), 0); })
+  .observe(document.body, { childList: true, subtree: true });
+
 export function toast(msg, ms = 2600) {
   const el = document.createElement("div");
   el.className = "toast"; el.textContent = msg;
@@ -55,5 +69,6 @@ export function layout(body, active = "") {
       <a href="#/new" class="cam"><span>📷</span>찍기</a>
       <a href="#/settings" class="${active === "settings" ? "on" : ""}"><span>⚙️</span>설정</a>
     </nav>`;
+  renderMath($app);
   window.scrollTo(0, 0);
 }

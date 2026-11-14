@@ -555,6 +555,7 @@ function editDocument(n) {
   const o = n.original, t = typeOf(o);
   modal(`<h3>✏️ 문제 고치기</h3>
     <form class="form" id="docForm">
+      <p class="muted small">수식은 $ 사이에 써요. 예: 분수 $\\frac{1}{2}$ → <code>$\\frac{1}{2}$</code>, 대분수 <code>$2\\frac{1}{3}$</code></p>
       <label>문제<textarea name="question" rows="5">${esc(o.question)}</textarea></label>
       ${t === "choice" ? `<label>보기 (한 줄에 하나씩)<textarea name="choices" rows="5">${esc(o.choices.join("\n"))}</textarea></label>
         <label>정답 번호<input name="answer" type="number" min="1" max="5" value="${o.answer + 1}"></label>`
