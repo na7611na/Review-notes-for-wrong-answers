@@ -4,7 +4,10 @@ import { esc } from "./ui.js";
 export const NUM = "①②③④⑤";
 
 // 단답형 비교용 정리: 띄어쓰기·대소문자·"x =", "답:" 같은 앞말, 끝의 마침표 무시
-const norm = (s) => String(s ?? "").normalize("NFKC").toLowerCase()
+// LaTeX 정답($\frac{1}{2}$ 등)을 입력하기 쉬운 꼴(1/2)로
+const plainMath = (s) => String(s ?? "").replace(/(\d+)\s*\\[dt]?frac\{(\d+)\}\{(\d+)\}/g, (_, a, b, c) => `${+a * +c + +b}/${c}`).replace(/\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1/$2").replace(/\\sqrt\{([^{}]*)\}/g, "√$1")
+  .replace(/\\times/g, "×").replace(/\\div/g, "÷").replace(/\\(left|right)/g, "").replace(/\^\{?(\d+)\}?/g, "^$1").replace(/[${}]/g, "").replace(/\\/g, "");
+const norm = (s) => plainMath(s).normalize("NFKC").toLowerCase()
   .replace(/\s+/g, "").replace(/[−–]/g, "-").replace(/^(정답|답)[:：]?/, "").replace(/^[a-z]=/, "").replace(/[.。]$/, "");
 function toNum(s) {
   const t = s.replace(/,/g, "");

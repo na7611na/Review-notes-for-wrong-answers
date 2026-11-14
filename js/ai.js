@@ -18,7 +18,8 @@ export function initAI(app) {
 
 const STYLE = `
 - 학생 눈높이에 맞춰 친근한 존댓말(~해요)로 써요.
-- 수식은 LaTeX를 쓰지 말고 x², √2, ½, ×, ÷, ≤ 같은 유니코드 문자로 써요.
+- 수식은 교과서처럼 보이도록 $ 사이에 LaTeX로 써요. 예: 분수 $\\frac{1}{2}$, 대분수 $2\\frac{1}{3}$, 거듭제곱 $x^{2}$, 루트 $\\sqrt{3}$, 곱셈 $3 \\times 4$, 나눗셈 $\\div$, 부등호 $\\le$.
+- 수식이 아닌 글(한글, 단위 등)은 $ 밖에 써요. JSON 안이므로 역슬래시는 두 번(\\\\) 써요.
 - 정답이 확실한 문제만 내고, 계산 문제는 정답을 직접 다시 검산해요.
 - explanation에는 풀이 과정을 2~3문장으로 써요.`;
 
@@ -33,6 +34,10 @@ const SAME_TYPE = `
   · 보기: 보기 개수와 배열 방식(숫자 크기순 등)은 원래 문제와 같게 하고, 보기 내용만 살짝 바꿔 정답 번호가 원래와 달라지게 해요.
 - 형식(type)과 보기 개수는 원래 문제와 같아요.`;
 
+// AI가 JSON 안에 \frac 처럼 역슬래시를 한 번만 쓰면 \f(폼피드)로 깨지므로 두 번으로 고친다
+const LATEX_CMD = /(?<!\\)\\(?=(?:frac|dfrac|tfrac|times|div|sqrt|cdot|cdots|ldots|le|leq|ge|geq|neq|ne|pm|mp|pi|theta|alpha|beta|gamma|angle|triangle|circ|left|right|text|mathrm|overline|vec|bar|square|therefore|because|approx|infty|log|sin|cos|tan|lim|sum|int|perp|parallel|sim|equiv|rightarrow|Rightarrow|quad|qquad|degree)(?![a-zA-Z]))/g;
+const fixLatexEscapes = (t) => t.replace(LATEX_CMD, "\\\\");
+
 async function run(parts) {
   if (!ai) throw new Error("AI_UNAVAILABLE");
   let lastErr;
@@ -41,7 +46,7 @@ async function run(parts) {
       const model = getGenerativeModel(ai, { model: name, generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }, { timeout: 60_000 });
       const res = await model.generateContent(parts);
       const text = res.response.text().trim().replace(/^```(json)?/i, "").replace(/```$/, "");
-      return JSON.parse(text);
+      return JSON.parse(fixLatexEscapes(text));
     } catch (e) {
       lastErr = e;
       console.warn(`AI 모델 ${name} 실패, 다음 모델 시도`, e);

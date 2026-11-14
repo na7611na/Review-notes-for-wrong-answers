@@ -347,7 +347,7 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .p-q b { flex-shrink: 0; font-size: 12pt; }
 .p-q img { max-width: 100%; max-height: 95mm; object-fit: contain; }
 .p-q .pre { white-space: pre-wrap; background: none; padding: 0; margin: 0; border-radius: 0; }
-.p-choices { list-style: none; margin: 8px 0 0 22px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(45%, 1fr)); gap: 2px 16px; }
+.p-choices { list-style: none; margin: 8px 0 0 22px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(45%, 1fr)); gap: 10px 16px; line-height: 1.9; }
 .p-short { margin: 10px 0 0 22px; }
 .p-short span { display: inline-block; width: 45%; border-bottom: 1px solid #333; }
 .p-essay { margin: 10px 0 0 22px; height: 30mm; background: repeating-linear-gradient(transparent 0 9mm, #CCC 9mm calc(9mm + 1px)); }
@@ -420,3 +420,8 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .crop-tools { justify-content: center; margin-bottom: 12px; }
 .crop-tools .btn { flex: 0 0 auto; }
 .recrop { margin-top: -2px; margin-bottom: 12px; }
+
+/* 수식 (KaTeX) */
+.katex { font-size: 1.08em; }
+.choice .katex, .doc-choices .katex { font-size: 1.05em; }
+.q-text .katex-html, .doc-q .katex-html { line-height: 1.2; }
