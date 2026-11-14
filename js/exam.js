@@ -8,7 +8,8 @@ import * as DB from "./db.js";
 import { $app, state, esc, go, fmtDate, toast, loading, layout, subjChip, subjVars, noteById, confirmBox } from "./ui.js";
 import { NUM, TYPE_LABEL, typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
 
-export const chapterOf = (n) => (n.chapter || n.unit || "단원 미정").trim();
+// 단원 이름 (학년·학기를 골랐으면 "중1-1 · 일차방정식")
+export const chapterOf = (n) => { const c = (n.chapter || n.unit || "단원 미정").trim(); return n.term && n.chapter ? `${n.term} · ${c}` : c; };
 
 // ---------------------------------------------------------- 시험지 문항 만들기
 const imgCache = new Map();

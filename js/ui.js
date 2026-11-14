@@ -9,12 +9,12 @@ export const go = (hash) => { if (location.hash === hash) window.dispatchEvent(n
 export const fmtDate = (t) => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일`; };
 export const noteById = (id) => state.notes.find((n) => n.id === id);
 
-export function toast(msg) {
+export function toast(msg, ms = 2600) {
   const el = document.createElement("div");
   el.className = "toast"; el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.classList.add("show"), 10);
-  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300); }, 2600);
+  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300); }, ms);
 }
 export function loading(on, msg = "잠시만 기다려 주세요…") {
   let el = document.getElementById("loading");
