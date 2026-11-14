@@ -262,10 +262,9 @@ async function saveResults(exam, s) {
 }
 
 // ---------------------------------------------------------- 인쇄
-// 보기 글이 길수록 한 줄에 적게 (짧으면 5개, 길면 한 줄에 1개)
+// 보기가 짧으면 한 줄에 2개, 길면 한 줄에 1개
 function choiceCols(choices) {
-  const m = Math.max(...choices.map(choiceLen));
-  return m <= 5 ? 5 : m <= 10 ? 3 : m <= 18 ? 2 : 1;
+  return Math.max(...choices.map(choiceLen)) <= 18 ? 2 : 1;
 }
 const pChoices = (q) => `<ol class="p-choices cols-${choiceCols(q.choices)}">${q.choices.map((c, i) => `<li><span class="p-cn">${NUM[i]}</span><span>${esc(c)}</span></li>`).join("")}</ol>`;
 const pShort = () => `<div class="p-short"><span>답</span><i></i></div>`;
