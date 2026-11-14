@@ -274,9 +274,9 @@ function pAnswerArea(q) {
   return t === "choice" ? pChoices(q) : t === "essay" ? pEssay() : pShort();
 }
 
-// what: 인쇄할 것 — both(문제지+정답지) / questions(문제지만) / answers(정답·해설지만)
-const printOpts = { big: false, work: null, what: "both" };
-const PRINT_WHAT = [["both", "문제지 + 정답지"], ["questions", "문제지만"], ["answers", "정답·해설지만"]];
+// what: 인쇄할 것 — questions(문제지) / answers(정답·해설지)
+const printOpts = { big: false, work: null, what: "questions" };
+const PRINT_WHAT = [["questions", "문제지"], ["answers", "정답·해설지"]];
 
 export async function renderPrint(id) {
   const exam = state.exams.find((e) => e.id === id);
@@ -329,10 +329,7 @@ export async function renderPrint(id) {
         </header>
         <p class="p-guide">✔ 문제를 끝까지 읽고, 묻는 것에 밑줄을 그어요. &nbsp; ✔ 풀고 나서 답을 한 번 더 확인해요.</p>
         <div class="p-items">${items.map(itemHtml).join("")}</div>`}
-        ${printOpts.what === "questions" ? "" : `<section class="p-answers ${onlyAns ? "alone" : ""}">
-          ${onlyAns ? "" : `<h2>정답과 해설 <small>${esc(exam.title)}</small></h2>`}
-          ${items.map(ansHtml).join("")}
-        </section>`}
+        ${onlyAns ? `<section class="p-answers alone">${items.map(ansHtml).join("")}</section>` : ""}
       </div>`;
     window.scrollTo(0, 0);
     $app.querySelectorAll("[data-opt]").forEach((c) => c.onchange = () => { printOpts[c.dataset.opt] = c.checked; draw(); });
