@@ -4,6 +4,8 @@
 //   users/{uid}                 : 프로필 { loginId, name, grade }
 //   users/{uid}/notes/{noteId}  : 오답 기록 (작은 썸네일 포함)
 //   users/{uid}/images/{noteId} : 원본 사진 (압축본, 상세 화면에서만 불러옴)
+//   users/{uid}/images/{noteId}-clean : 지우개로 채점 표시를 지운 사진
+//   users/{uid}/exams/{examId}  : 맞춤형 문제(시험지)와 채점 결과
 //   bank/{unitId}               : 부모님이 추가한 문제은행 단원 (가족 공용)
 // ============================================================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
@@ -80,12 +82,35 @@ export async function deleteNote(uid, id) {
   const batch = writeBatch(db);
   batch.delete(doc(db, "users", uid, "notes", id));
   batch.delete(doc(db, "users", uid, "images", id));
+  batch.delete(doc(db, "users", uid, "images", `${id}-clean`));
   await batch.commit();
 }
 export async function getImage(uid, id) {
   const s = await getDoc(doc(db, "users", uid, "images", id));
   return s.exists() ? s.data().data : null;
 }
+
+// 지우개로 채점 표시를 지운 사진 (원본과 따로 저장: 문서 하나당 1MB 제한)
+export async function getCleanImage(uid, id) {
+  const s = await getDoc(doc(db, "users", uid, "images", `${id}-clean`));
+  return s.exists() ? s.data().data : null;
+}
+export const saveCleanImage = (uid, id, data) => setDoc(doc(db, "users", uid, "images", `${id}-clean`), { data });
+export const deleteCleanImage = (uid, id) => deleteDoc(doc(db, "users", uid, "images", `${id}-clean`));
+
+// ---------- 맞춤형 문제(시험지)
+const examsCol = (uid) => collection(db, "users", uid, "exams");
+export async function listExams(uid) {
+  const snap = await getDocs(query(examsCol(uid), orderBy("createdAt", "desc")));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+export async function createExam(uid, exam) {
+  const ref = doc(examsCol(uid));
+  await setDoc(ref, exam);
+  return ref.id;
+}
+export const updateExam = (uid, id, data) => updateDoc(doc(db, "users", uid, "exams", id), data);
+export const deleteExam = (uid, id) => deleteDoc(doc(db, "users", uid, "exams", id));
 
 // ---------- 가족 공용 문제은행
 export async function listCustomUnits() {

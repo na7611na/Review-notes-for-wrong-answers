@@ -2,38 +2,10 @@ import { SUBJECTS, SUBJECT_KEYS, GRADES, BANDS, bandOf, REASONS, ENCOURAGE, PRAI
 import { unitsFor, findUnit, drawProblems } from "./bank.js";
 import * as DB from "./db.js";
 import { initAI, analyzeProblem, moreProblems } from "./ai.js";
-
-const $app = document.getElementById("app");
-const state = { uid: null, profile: null, notes: [], custom: [], practice: null, draft: null };
-
-// ---------------------------------------------------------- 공용 도구
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const go = (hash) => { if (location.hash === hash) render(); else location.hash = hash; };
-const fmtDate = (t) => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일`; };
-const noteById = (id) => state.notes.find((n) => n.id === id);
-
-function toast(msg) {
-  const el = document.createElement("div");
-  el.className = "toast"; el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.classList.add("show"), 10);
-  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 300); }, 2600);
-}
-function loading(on, msg = "잠시만 기다려 주세요…") {
-  let el = document.getElementById("loading");
-  if (!on) { el?.remove(); return; }
-  if (!el) { el = document.createElement("div"); el.id = "loading"; document.body.appendChild(el); }
-  el.innerHTML = `<div class="loading-box"><div class="spinner"></div><p>${esc(msg)}</p></div>`;
-}
-function modal(html, onMount) {
-  const el = document.createElement("div");
-  el.className = "modal-back";
-  el.innerHTML = `<div class="modal">${html}</div>`;
-  el.addEventListener("click", (e) => { if (e.target === el || e.target.closest("[data-close]")) el.remove(); });
-  document.body.appendChild(el);
-  onMount?.(el);
-  return el;
-}
+import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
+import { typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
+import { openEraser } from "./eraser.js";
+import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage } from "./exam.js";
 
 // 사진을 JPEG로 줄이기 (Firestore 문서 1MB 제한 + 무료 용량 절약)
 function loadImage(file) {
@@ -59,18 +31,46 @@ async function compressPhoto(file) {
   return { image: data, thumb: toJpeg(img, 260, 0.6) };
 }
 
-const subjChip = (key) => `<span class="subj-chip" style="--sc:${SUBJECTS[key].color};--ss:${SUBJECTS[key].soft}">${SUBJECTS[key].icon} ${SUBJECTS[key].name}</span>`;
-const statusBadge = (n) => n.status === "done" ? `<span class="badge done">✅ 학습 완료</span>` : `<span class="badge learning">✏️ 학습 중</span>`;
+// AI 분석 결과 중 오답노트에 저장할 부분
+const aiFields = (r) => ({
+  source: "ai", original: r.original, problemText: r.problemText, correctAnswer: r.correctAnswer,
+  unit: r.unit, chapter: r.chapter, aiChapter: r.chapter, concept: r.concept, firstSet: r.problems,
+});
 
-function layout(body, active = "") {
-  $app.innerHTML = `
-    <main class="page">${body}</main>
-    <nav class="bottom-nav">
-      <a href="#/home" class="${active === "home" ? "on" : ""}"><span>🏠</span>홈</a>
-      <a href="#/new" class="cam"><span>📷</span>찍기</a>
-      <a href="#/settings" class="${active === "settings" ? "on" : ""}"><span>⚙️</span>설정</a>
-    </nav>`;
-  window.scrollTo(0, 0);
+// ---------------------------------------------------------- 단원 선택지
+// 내가 직접 추가했거나 이미 쓴 단원이 먼저, 그다음 학년에 맞는 기본 단원
+function chapterOptions(subject, extra = []) {
+  const band = bandOf(state.profile?.grade);
+  const mine = state.profile?.chapters?.[subject] || [];
+  const used = state.notes.filter((n) => n.subject === subject && n.chapter).map((n) => n.chapter);
+  const basic = unitsFor(subject, state.custom).filter((u) => u.band === band).map((u) => u.title);
+  return [...new Set([...extra, ...mine, ...used, ...basic].map((c) => c.trim()).filter(Boolean))];
+}
+// 새로 입력한 단원은 프로필에 저장해 다음부터 선택지에 나온다
+async function rememberChapter(subject, chapter) {
+  if (!chapter) return;
+  const all = { ...(state.profile.chapters || {}) };
+  const list = all[subject] || [];
+  if (list.includes(chapter)) return;
+  all[subject] = [chapter, ...list].slice(0, 60);
+  state.profile.chapters = all;
+  await DB.saveProfile(state.uid, { chapters: all }).catch((e) => console.warn("단원 저장 실패", e));
+}
+// 단원 칩 + 직접 입력 영역
+function chapterPicker(subject, selected, extra = []) {
+  const opts = chapterOptions(subject, selected ? [selected, ...extra] : extra);
+  return `<div class="chip-row chapter-row">
+      <button class="ch-chip ${!selected ? "on" : ""}" data-chapter="">🤖 AI가 정하기</button>
+      ${opts.map((c) => `<button class="ch-chip ${c === selected ? "on" : ""}" data-chapter="${esc(c)}">${esc(c)}</button>`).join("")}
+    </div>
+    <div class="ch-add"><input placeholder="✏️ 단원 이름 직접 입력 (예: 소인수분해)" maxlength="30" data-newch><button class="btn small" data-addch>추가</button></div>`;
+}
+function bindChapterPicker(root, onPick) {
+  root.querySelectorAll("[data-chapter]").forEach((b) => b.onclick = () => onPick(b.dataset.chapter));
+  const inp = root.querySelector("[data-newch]");
+  const add = () => { const v = inp.value.trim(); if (v) onPick(v); };
+  root.querySelector("[data-addch]").onclick = add;
+  inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } };
 }
 
 // ---------------------------------------------------------- 라우터
@@ -78,13 +78,17 @@ async function render() {
   if (!DB.isConfigured) return renderSetup();
   if (!state.uid) return renderAuth();
   const [, route, param] = (location.hash || "#/home").split("/");
-  const [id, qs] = (param || "").split("?");
-  const params = new URLSearchParams(qs || (route || "").split("?")[1] || "");
+  const [id] = (param || "").split("?");
+  const params = new URLSearchParams((route || "").split("?")[1] || "");
   switch ((route || "home").split("?")[0]) {
     case "subject": return renderSubject(id);
     case "new": return renderNew(params.get("subject"));
     case "note": return renderNote(id);
     case "practice": return renderPractice(id);
+    case "exams": return renderExams();
+    case "exam-new": return renderExamNew();
+    case "exam": return renderExam(id);
+    case "print": return renderPrint(id);
     case "settings": return renderSettings();
     case "bank": return renderBank();
     default: return renderHome();
@@ -167,7 +171,12 @@ function renderHome() {
     </section>
     <a class="cta" href="#/new">
       <span class="cta-icon">📷</span>
-      <span><b>틀린 문제 찍기</b><small>사진만 찍으면 개념 정리와 유사문제가 준비돼요</small></span>
+      <span><b>틀린 문제 찍기</b><small>사진만 찍으면 개념 정리와 동일 유형 문제가 준비돼요</small></span>
+      <span class="arrow">›</span>
+    </a>
+    <a class="cta soft" href="#/exams">
+      <span class="cta-icon">📝</span>
+      <span><b>맞춤형 문제</b><small>틀린 문제를 모아 새 시험지처럼 다시 풀어요 · 인쇄 가능</small></span>
       <span class="arrow">›</span>
     </a>
     <h2 class="sec-title">과목별 오답노트</h2>
@@ -175,7 +184,7 @@ function renderHome() {
       ${SUBJECT_KEYS.map((k) => {
         const list = state.notes.filter((n) => n.subject === k);
         const l = list.filter((n) => n.status !== "done").length;
-        return `<a class="subject-card" href="#/subject/${k}" style="--sc:${SUBJECTS[k].color};--ss:${SUBJECTS[k].soft}">
+        return `<a class="subject-card" href="#/subject/${k}" style="${subjVars(k)}">
           <span class="s-icon">${SUBJECTS[k].icon}</span>
           <b>${SUBJECTS[k].name}</b>
           <small>학습 중 ${l} · 완료 ${list.length - l}</small>
@@ -205,7 +214,7 @@ function renderSubject(key, filter = "learning") {
   const all = state.notes.filter((n) => n.subject === key);
   const list = filter === "all" ? all : all.filter((n) => (filter === "done" ? n.status === "done" : n.status !== "done"));
   layout(`
-    <header class="subject-head" style="--sc:${s.color};--ss:${s.soft}">
+    <header class="subject-head" style="${subjVars(key)}">
       <a href="#/home" class="back">‹</a>
       <span class="s-icon">${s.icon}</span><h1>${s.name} 오답노트</h1>
     </header>
@@ -222,7 +231,7 @@ function renderSubject(key, filter = "learning") {
 
 // ---------------------------------------------------------- 새 오답 기록
 function renderNew(subject) {
-  const d = state.draft && (!subject || state.draft.subject === subject) ? state.draft : { subject: subject || null, image: null, thumb: null, reasons: [], etc: "", memo: "" };
+  const d = state.draft && (!subject || state.draft.subject === subject) ? state.draft : { subject: subject || null, image: null, thumb: null, reasons: [], etc: "", memo: "", chapter: "" };
   state.draft = d;
   const reasons = d.subject ? REASONS[d.subject] : [];
   layout(`
@@ -231,12 +240,17 @@ function renderNew(subject) {
     <section class="card step">
       <h3><span class="num">1</span>과목을 골라요</h3>
       <div class="chip-row">
-        ${SUBJECT_KEYS.map((k) => `<button class="subj-pick ${d.subject === k ? "on" : ""}" data-subj="${k}" style="--sc:${SUBJECTS[k].color};--ss:${SUBJECTS[k].soft}">${SUBJECTS[k].icon} ${SUBJECTS[k].name}</button>`).join("")}
+        ${SUBJECT_KEYS.map((k) => `<button class="subj-pick ${d.subject === k ? "on" : ""}" data-subj="${k}" style="${subjVars(k)}">${SUBJECTS[k].icon} ${SUBJECTS[k].name}</button>`).join("")}
       </div>
     </section>
 
+    <section class="card step ${d.subject ? "" : "disabled"}" id="chapterStep">
+      <h3><span class="num">2</span>단원을 골라요 <small class="muted">(없으면 직접 입력)</small></h3>
+      ${d.subject ? chapterPicker(d.subject, d.chapter) : `<p class="muted">과목을 먼저 골라 주세요.</p>`}
+    </section>
+
     <section class="card step">
-      <h3><span class="num">2</span>틀린 문제를 찍어요</h3>
+      <h3><span class="num">3</span>틀린 문제를 찍어요</h3>
       ${d.image ? `<div class="photo-preview"><img src="${d.image}" alt="문제 사진"></div>` : `<div class="photo-empty">📄<p>문제가 잘 보이도록 밝은 곳에서<br>한 문제만 꽉 차게 찍어 주세요</p></div>`}
       <div class="btn-row">
         <label class="btn primary">📷 카메라로 찍기<input type="file" accept="image/*" capture="environment" hidden data-photo></label>
@@ -245,7 +259,7 @@ function renderNew(subject) {
     </section>
 
     <section class="card step ${d.subject ? "" : "disabled"}">
-      <h3><span class="num">3</span>왜 틀렸을까요? <small class="muted">(여러 개 선택 가능)</small></h3>
+      <h3><span class="num">4</span>왜 틀렸을까요? <small class="muted">(여러 개 선택 가능)</small></h3>
       ${d.subject ? `<div class="check-list">
         ${reasons.map((r) => `<label class="check"><input type="checkbox" value="${esc(r)}" ${d.reasons.includes(r) ? "checked" : ""} data-reason><span>${esc(r)}</span></label>`).join("")}
       </div>
@@ -253,7 +267,7 @@ function renderNew(subject) {
     </section>
 
     <section class="card step">
-      <h3><span class="num">4</span>메모 <small class="muted">(선택)</small></h3>
+      <h3><span class="num">5</span>메모 <small class="muted">(선택)</small></h3>
       <textarea rows="3" placeholder="내가 쓴 답, 헷갈렸던 부분 등을 적어요" data-memo>${esc(d.memo)}</textarea>
     </section>
 
@@ -261,9 +275,10 @@ function renderNew(subject) {
   `);
 
   $app.querySelectorAll("[data-subj]").forEach((b) => b.onclick = () => {
-    if (d.subject !== b.dataset.subj) { d.subject = b.dataset.subj; d.reasons = []; }
+    if (d.subject !== b.dataset.subj) { d.subject = b.dataset.subj; d.reasons = []; d.chapter = ""; }
     renderNew();
   });
+  if (d.subject) bindChapterPicker($app.querySelector("#chapterStep"), (c) => { d.chapter = c; renderNewKeepScroll(); });
   $app.querySelectorAll("[data-photo]").forEach((inp) => inp.onchange = async () => {
     const file = inp.files[0]; if (!file) return;
     loading(true, "사진을 정리하는 중…");
@@ -277,6 +292,8 @@ function renderNew(subject) {
   $app.querySelector("[data-memo]").oninput = (e) => (d.memo = e.target.value);
   $app.querySelector("#saveNote").onclick = saveDraft;
 }
+
+function renderNewKeepScroll() { const y = window.scrollY; renderNew(); window.scrollTo(0, y); }
 
 async function saveDraft() {
   const d = state.draft;
@@ -293,8 +310,8 @@ async function saveDraft() {
   loading(true, "AI 선생님이 문제를 살펴보고 있어요… 🔍");
   let note = null;
   try {
-    const r = await analyzeProblem({ imageBase64: d.image.split(",")[1], subject: d.subject, grade, reasons, memo: d.memo, bankUnits });
-    note = { ...base, source: "ai", problemText: r.problemText, correctAnswer: r.correctAnswer, unit: r.unit, concept: r.concept, firstSet: r.problems, bankUnitId: r.bankUnitId };
+    const r = await analyzeProblem({ imageBase64: d.image.split(",")[1], subject: d.subject, grade, reasons, memo: d.memo, bankUnits, chapter: d.chapter });
+    note = { ...base, ...aiFields(r), bankUnitId: r.bankUnitId };
   } catch (e) {
     console.warn("AI 분석 실패", e);
   }
@@ -305,12 +322,15 @@ async function saveDraft() {
     const unit = await pickBankUnit(d.subject, "AI가 지금은 문제를 분석하지 못했어요 😢<br>(무료 사용량 초과, 인터넷 연결, 흐린 사진 등)<br><b>비슷한 단원을 고르면 문제은행으로 연습할 수 있어요.</b>", true);
     if (unit === undefined) return; // 취소
     note = unit
-      ? { ...base, source: "bank", unit: unit.title, concept: unit.concept, bankUnitId: unit.id }
-      : { ...base, source: "none", unit: "", concept: null, bankUnitId: null };
+      ? { ...base, source: "bank", unit: unit.title, chapter: unit.title, concept: unit.concept, bankUnitId: unit.id }
+      : { ...base, source: "none", unit: d.chapter || "", concept: null, bankUnitId: null };
   }
+  // 직접 고른 단원이 있으면 그 단원으로 분류
+  if (d.chapter) note.chapter = d.chapter;
 
   loading(true, "오답노트에 저장하는 중…");
   try {
+    await rememberChapter(d.subject, d.chapter);
     const id = await DB.createNote(state.uid, note, d.image);
     state.notes.unshift({ id, ...note });
     state.draft = null;
@@ -348,23 +368,24 @@ function pickBankUnit(subject, message, allowNone = false) {
 }
 
 // ---------------------------------------------------------- 오답 상세
-async function renderNote(id) {
+async function renderNote(id, showClean = true) {
   const n = noteById(id);
   if (!n) return go("#/home");
   const s = SUBJECTS[n.subject];
   const c = n.concept;
   layout(`
-    <header class="subject-head" style="--sc:${s.color};--ss:${s.soft}">
+    <header class="subject-head" style="${subjVars(n.subject)}">
       <a href="#/subject/${n.subject}" class="back">‹</a>
       <span class="s-icon">${s.icon}</span>
-      <div><small>${s.name} · ${fmtDate(n.createdAt)}</small><h1>${esc(n.unit || "단원 미정")}</h1></div>
+      <div><small>${s.name} · ${fmtDate(n.createdAt)}${n.chapter && n.chapter !== n.unit ? ` · ${esc(n.chapter)}` : ""}</small><h1>${esc(n.unit || "단원 미정")}</h1></div>
     </header>
     <div class="status-row">${statusBadge(n)}${n.rounds ? `<span class="muted">연습 ${n.rounds}회 · 정답률 ${Math.round((n.totalCorrect / Math.max(1, n.totalSolved)) * 100)}%</span>` : ""}</div>
 
     <section class="card">
-      <h3>📸 틀린 문제</h3>
+      <h3>📸 틀린 문제 ${n.hasClean ? `<span class="seg mini"><button class="${showClean ? "on" : ""}" data-view="clean">지운 사진</button><button class="${showClean ? "" : "on"}" data-view="orig">원본</button></span>` : ""}</h3>
       <div class="photo-preview" id="photo"><img src="${n.thumb}" alt="문제 사진" class="blur"></div>
-      ${n.problemText ? `<details class="fold"><summary>문제 글로 보기</summary><p class="pre">${esc(n.problemText)}</p></details>` : ""}
+      <button class="btn full" id="erase">🧽 채점 표시 지우기 <small class="muted">(맞춤형 문제·인쇄용)</small></button>
+      ${n.problemText ? `<details class="fold"><summary>문제 글로 보기 (채점 표시 없이)</summary><p class="pre">${esc(n.problemText)}</p></details>` : ""}
       ${n.correctAnswer ? `<details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(n.correctAnswer)}</p></details>` : ""}
     </section>
 
@@ -374,7 +395,7 @@ async function renderNote(id) {
       ${n.memo ? `<p class="memo">📝 ${esc(n.memo)}</p>` : ""}
     </section>
 
-    ${c ? `<section class="card concept" style="--sc:${s.color};--ss:${s.soft}">
+    ${c ? `<section class="card concept" style="${subjVars(n.subject)}">
       <h3>💡 핵심 개념</h3>
       <h4>${esc(c.title)}</h4>
       <p>${esc(c.summary)}</p>
@@ -385,19 +406,49 @@ async function renderNote(id) {
       <p class="muted">아직 개념 정리가 없어요. AI로 다시 분석하거나 문제은행 단원을 골라 주세요.</p>
     </section>`}
 
-    <button class="btn primary big full" id="practice">${n.status === "done" ? "🔁 유사문제 다시 연습하기" : "✏️ 유사문제 3개 풀기"}</button>
+    <button class="btn primary big full" id="practice">${n.status === "done" ? "🔁 동일 유형 문제 연습" : "✏️ 동일 유형 문제 풀기"}</button>
     <div class="btn-row sub">
-      ${n.source !== "ai" ? `<button class="btn" id="reAI">🤖 AI로 다시 분석</button>` : ""}
+      <button class="btn" id="chChapter">📂 단원 바꾸기</button>
+      ${!n.original ? `<button class="btn" id="reAI">🤖 AI로 다시 분석</button>` : ""}
       <button class="btn" id="pickUnit">📚 문제은행 단원 ${n.bankUnitId ? "바꾸기" : "연결"}</button>
       <button class="btn danger ghost" id="del">🗑️ 삭제</button>
     </div>
   `);
 
-  DB.getImage(state.uid, id).then((img) => {
+  const loadPhoto = async () => (showClean && n.hasClean && (await DB.getCleanImage(state.uid, id))) || DB.getImage(state.uid, id);
+  loadPhoto().then((img) => {
     const box = $app.querySelector("#photo");
     if (img && box) { box.innerHTML = `<img src="${img}" alt="문제 사진">`; box.onclick = () => modal(`<img class="full-img" src="${img}" alt=""><button class="btn full" data-close>닫기</button>`); }
   });
+  $app.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => renderNote(id, b.dataset.view === "clean"));
 
+  $app.querySelector("#erase").onclick = async () => {
+    const src = (n.hasClean && (await DB.getCleanImage(state.uid, id))) || (await DB.getImage(state.uid, id));
+    if (!src) return toast("사진을 불러오지 못했어요.");
+    const cleaned = await openEraser(src);
+    if (!cleaned) return;
+    loading(true, "저장하는 중…");
+    try {
+      await DB.saveCleanImage(state.uid, id, cleaned);
+      if (!n.hasClean) { await DB.updateNote(state.uid, id, { hasClean: true }); n.hasClean = true; }
+      forgetImage(id);
+      toast("채점 표시를 지운 사진을 저장했어요 ✨");
+    } catch (e) { toast("저장하지 못했어요: " + e.message); }
+    loading(false); renderNote(id, true);
+  };
+  $app.querySelector("#chChapter").onclick = () => {
+    modal(`<h3>📂 단원 바꾸기</h3><p class="muted center small">맞춤형 문제는 이 단원으로 묶여요.</p><div id="chBox">${chapterPicker(n.subject, n.chapter)}</div>
+      <button class="btn ghost full" data-close>닫기</button>`, (el) => {
+      bindChapterPicker(el, async (c) => {
+        el.remove();
+        const chapter = c || n.aiChapter || n.unit || "";
+        await rememberChapter(n.subject, c);
+        await DB.updateNote(state.uid, id, { chapter }); n.chapter = chapter;
+        toast("단원을 바꿨어요."); renderNote(id);
+      });
+      el.querySelector("[data-chapter='']").textContent = "🤖 AI가 정한 단원";
+    });
+  };
   $app.querySelector("#practice").onclick = () => {
     if (!n.firstSet?.length && !n.bankUnitId && n.source !== "ai") return toast("먼저 AI로 분석하거나 문제은행 단원을 연결해 주세요.");
     state.practice = null;
@@ -406,7 +457,7 @@ async function renderNote(id) {
   $app.querySelector("#pickUnit").onclick = async () => {
     const u = await pickBankUnit(n.subject, "연습에 사용할 문제은행 단원을 골라요.");
     if (!u) return;
-    const patch = { bankUnitId: u.id, ...(n.source !== "ai" ? { source: "bank", unit: u.title, concept: u.concept } : {}) };
+    const patch = { bankUnitId: u.id, ...(n.source !== "ai" ? { source: "bank", unit: u.title, chapter: u.title, concept: u.concept } : {}) };
     await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
     toast("단원을 연결했어요."); renderNote(id);
   };
@@ -416,26 +467,23 @@ async function renderNote(id) {
     loading(true, "AI 선생님이 문제를 살펴보고 있어요… 🔍");
     try {
       const r = await analyzeProblem({ imageBase64: img.split(",")[1], subject: n.subject, grade: state.profile?.grade, reasons: n.reasons, memo: n.memo, bankUnits: unitsFor(n.subject, state.custom) });
-      const patch = { source: "ai", problemText: r.problemText, correctAnswer: r.correctAnswer, unit: r.unit, concept: r.concept, firstSet: r.problems, bankUnitId: n.bankUnitId || r.bankUnitId };
+      const patch = { ...aiFields(r), bankUnitId: n.bankUnitId || r.bankUnitId };
+      if (n.chapter && n.chapter !== n.aiChapter && n.chapter !== n.unit) patch.chapter = n.chapter;
       await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
       toast("분석을 마쳤어요 ✨");
     } catch (e) { console.warn(e); toast("AI가 아직 분석하지 못했어요. 잠시 후 다시 해 주세요."); }
     loading(false); renderNote(id);
   });
-  $app.querySelector("#del").onclick = () => {
-    modal(`<h3>이 오답 기록을 삭제할까요?</h3><p class="muted center">삭제하면 되돌릴 수 없어요.</p>
-      <div class="btn-row"><button class="btn danger" data-yes>삭제</button><button class="btn ghost" data-close>취소</button></div>`, (el) => {
-      el.querySelector("[data-yes]").onclick = async () => {
-        el.remove(); loading(true, "삭제하는 중…");
-        try { await DB.deleteNote(state.uid, id); state.notes = state.notes.filter((x) => x.id !== id); go(`#/subject/${n.subject}`); }
-        catch (e) { toast("삭제하지 못했어요."); }
-        loading(false);
-      };
-    });
+  $app.querySelector("#del").onclick = async () => {
+    if (!(await confirmBox("이 오답 기록을 삭제할까요?", "삭제하면 되돌릴 수 없어요.", "삭제", true))) return;
+    loading(true, "삭제하는 중…");
+    try { await DB.deleteNote(state.uid, id); state.notes = state.notes.filter((x) => x.id !== id); go(`#/subject/${n.subject}`); }
+    catch (e) { toast("삭제하지 못했어요."); }
+    loading(false);
   };
 }
 
-// ---------------------------------------------------------- 유사문제 풀기
+// ---------------------------------------------------------- 동일 유형 문제 풀기
 async function nextSet(n, p) {
   // 1라운드는 처음 분석 때 만든 문제, 그다음은 AI → 문제은행 순서로 새 문제를 가져온다
   if (p.round === 1 && n.firstSet?.length) return { problems: n.firstSet, from: "ai" };
@@ -450,67 +498,78 @@ async function nextSet(n, p) {
   return null;
 }
 
+async function askBankSet(n, seen) {
+  const u = await pickBankUnit(n.subject, "AI가 지금은 새 문제를 만들지 못했어요.<br>연습할 문제은행 단원을 골라 주세요.");
+  if (!u) return null;
+  await DB.updateNote(state.uid, n.id, { bankUnitId: u.id }); n.bankUnitId = u.id;
+  return { problems: drawProblems(u, 3, seen), from: "bank" };
+}
+
+const resetQ = (p) => Object.assign(p, { a: {}, checked: false });
+
 async function renderPractice(id) {
   const n = noteById(id);
   if (!n) return go("#/home");
   let p = state.practice;
   if (!p || p.noteId !== id) {
-    p = state.practice = { noteId: id, round: 1, problems: [], idx: 0, results: [], seen: [], lastWrong: 0, selected: null, checked: false };
+    p = state.practice = { noteId: id, round: 1, problems: [], idx: 0, results: [], seen: [], lastWrong: 0, a: {}, checked: false };
     loading(true, "문제를 준비하는 중… ✏️");
-    const set = await nextSet(n, p);
+    const set = (await nextSet(n, p)) || (loading(false), await askBankSet(n, []));
     loading(false);
-    if (!set) {
-      const u = await pickBankUnit(n.subject, "AI가 지금은 새 문제를 만들지 못했어요.<br>연습할 문제은행 단원을 골라 주세요.");
-      if (!u) { state.practice = null; return go(`#/note/${id}`); }
-      await DB.updateNote(state.uid, id, { bankUnitId: u.id }); n.bankUnitId = u.id;
-      p.problems = drawProblems(u, 3, []); p.from = "bank";
-    } else { p.problems = set.problems; p.from = set.from; }
+    if (!set) { state.practice = null; return go(`#/note/${id}`); }
+    p.problems = set.problems; p.from = set.from;
     p.seen.push(...p.problems.map((x) => x.question));
   }
   if (p.idx >= p.problems.length) return renderRoundResult(n, p);
 
   const s = SUBJECTS[n.subject];
   const q = p.problems[p.idx];
+  const t = typeOf(q);
+  const r = p.results[p.idx];
+  const needSelf = p.checked && t === "essay" && r == null;
   layout(`
-    <header class="subject-head" style="--sc:${s.color};--ss:${s.soft}">
+    <header class="subject-head" style="${subjVars(n.subject)}">
       <a href="#/note/${id}" class="back">‹</a>
       <span class="s-icon">${s.icon}</span>
-      <div><small>${esc(n.unit || s.name)}</small><h1>유사문제 ${p.round > 1 ? `· 추가 ${p.round - 1}회차` : ""}</h1></div>
+      <div><small>${esc(n.unit || s.name)}</small><h1>동일 유형 문제 ${p.round > 1 ? `· 추가 ${p.round - 1}회차` : ""}</h1></div>
     </header>
     <div class="progress">
       ${p.problems.map((_, i) => `<span class="dot ${i < p.idx ? (p.results[i] ? "ok" : "no") : i === p.idx ? "now" : ""}"></span>`).join("")}
       <small class="muted">${p.idx + 1} / ${p.problems.length}</small>
       ${p.from === "bank" ? `<small class="muted">· 문제은행</small>` : ""}
     </div>
-    <section class="card question" style="--sc:${s.color};--ss:${s.soft}">
+    <section class="card question" style="${subjVars(n.subject)}">
       <p class="q-text">${esc(q.question)}</p>
-      <div class="choices">
-        ${q.choices.map((c, i) => {
-          let cls = "";
-          if (p.checked) cls = i === q.answer ? "correct" : i === p.selected ? "wrong" : "dim";
-          else if (i === p.selected) cls = "sel";
-          return `<button class="choice ${cls}" data-i="${i}" ${p.checked ? "disabled" : ""}><span class="no">${"①②③④"[i]}</span>${esc(c)}</button>`;
-        }).join("")}
-      </div>
-      ${p.checked ? `<div class="feedback ${p.results[p.idx] ? "ok" : "no"}">
-        <b>${p.results[p.idx] ? "정답이에요! 🎉" : "아쉬워요! 정답은 " + "①②③④"[q.answer] + " 이에요."}</b>
+      ${answerInput(q, p.a, { checked: p.checked })}
+      ${p.checked ? `<div class="feedback ${r === true ? "ok" : r === false ? "no" : "neutral"}">
+        <b>${r === true ? "정답이에요! 🎉" : r === false ? `아쉬워요! 정답은 ${esc(answerText(q))} 이에요.` : `모범 답안: ${esc(answerText(q))}`}</b>
         <p>${esc(q.explanation)}</p>
+        ${t === "essay" ? `<div class="self-check"><span>내 답과 비교해 보세요</span>
+          <button class="ok ${r === true ? "on" : ""}" data-self="1">○ 맞았어요</button>
+          <button class="no ${r === false ? "on" : ""}" data-self="0">✕ 틀렸어요</button></div>` : ""}
       </div>` : ""}
     </section>
-    <button class="btn primary big full" id="act" ${p.selected === null ? "disabled" : ""}>
+    <button class="btn primary big full" id="act" ${(!p.checked && !hasAnswer(q, p.a)) || needSelf ? "disabled" : ""}>
       ${!p.checked ? "정답 확인" : p.idx + 1 < p.problems.length ? "다음 문제 ›" : "결과 보기"}
     </button>
   `);
-  $app.querySelectorAll(".choice").forEach((b) => b.onclick = () => { p.selected = +b.dataset.i; renderPractice(id); });
-  $app.querySelector("#act").onclick = () => {
-    if (!p.checked) { p.checked = true; p.results[p.idx] = p.selected === q.answer; }
-    else { p.idx++; p.selected = null; p.checked = false; }
+  const act = $app.querySelector("#act");
+  $app.querySelectorAll("[data-choice]").forEach((b) => b.onclick = () => { p.a.selected = +b.dataset.choice; renderPractice(id); });
+  const txt = $app.querySelector("[data-text]");
+  if (txt && !p.checked) {
+    txt.oninput = () => { p.a.text = txt.value; act.disabled = !hasAnswer(q, p.a); };
+    txt.onkeydown = (e) => { if (e.key === "Enter" && t === "short" && hasAnswer(q, p.a)) act.click(); };
+    txt.focus();
+  }
+  $app.querySelectorAll("[data-self]").forEach((b) => b.onclick = () => { p.results[p.idx] = b.dataset.self === "1"; renderPractice(id); });
+  act.onclick = () => {
+    if (!p.checked) { p.checked = true; p.results[p.idx] = autoGrade(q, p.a); }
+    else { p.idx++; resetQ(p); }
     renderPractice(id);
   };
 }
 
 async function renderRoundResult(n, p) {
-  const s = SUBJECTS[n.subject];
   const correct = p.results.filter(Boolean).length;
   const total = p.problems.length;
   const perfect = correct === total;
@@ -525,19 +584,19 @@ async function renderRoundResult(n, p) {
   }
 
   layout(`
-    <section class="card result ${perfect ? "perfect" : ""}" style="--sc:${s.color};--ss:${s.soft}">
+    <section class="card result ${perfect ? "perfect" : ""}" style="${subjVars(n.subject)}">
       <div class="big-emoji">${perfect ? "🏆" : "🌱"}</div>
       <h2>${total}문제 중 ${correct}문제 정답!</h2>
       <p class="msg">${esc(p.message)}</p>
       <div class="progress center">${p.results.map((r) => `<span class="dot ${r ? "ok" : "no"}"></span>`).join("")}</div>
       ${perfect ? `<p class="muted">이 오답은 <b>학습 완료</b>로 옮겨졌어요.</p>`
-        : `<p class="muted">같은 유형의 새 문제 3개로 한 번 더 도전해요.<br>모두 맞히면 학습 완료예요!</p>`}
+        : `<p class="muted">숫자만 바꾼 동일 유형 문제로 한 번 더 도전해요.<br>모두 맞히면 학습 완료예요!</p>`}
     </section>
     ${!perfect ? `<section class="card">
       <h3>📌 틀린 문제 다시 보기</h3>
-      ${p.problems.map((q, i) => p.results[i] ? "" : `<div class="review"><p>${esc(q.question)}</p><p class="ans">정답: ${"①②③④"[q.answer]} ${esc(q.choices[q.answer])}</p><p class="muted">${esc(q.explanation)}</p></div>`).join("")}
+      ${p.problems.map((q, i) => p.results[i] ? "" : `<div class="review"><p>${esc(q.question)}</p><p class="ans">정답: ${esc(answerText(q))}</p><p class="muted">${esc(q.explanation)}</p></div>`).join("")}
     </section>` : ""}
-    ${perfect ? `<button class="btn primary big full" id="home">🏠 홈으로</button>` : `<button class="btn primary big full" id="more">💪 추가 문제 3개 풀기</button>`}
+    ${perfect ? `<button class="btn primary big full" id="home">🏠 홈으로</button>` : `<button class="btn primary big full" id="more">💪 동일 유형 문제 더 풀기</button>`}
     <a class="btn full" href="#/note/${n.id}">오답노트로 돌아가기</a>
   `);
   $app.querySelector("#home")?.addEventListener("click", () => { state.practice = null; go("#/home"); });
@@ -547,13 +606,10 @@ async function renderRoundResult(n, p) {
     loading(true, "새 문제를 만드는 중… ✏️");
     let set = await nextSet(n, p);
     loading(false);
-    if (!set) {
-      const u = await pickBankUnit(n.subject, "AI가 지금은 새 문제를 만들지 못했어요.<br>연습할 문제은행 단원을 골라 주세요.");
-      if (!u) { p.round--; return; }
-      await DB.updateNote(state.uid, n.id, { bankUnitId: u.id }); n.bankUnitId = u.id;
-      set = { problems: drawProblems(u, 3, p.seen), from: "bank" };
-    }
-    Object.assign(p, { problems: set.problems, from: set.from, idx: 0, results: [], selected: null, checked: false, saved: false });
+    if (!set) set = await askBankSet(n, p.seen);
+    if (!set) { p.round--; return; }
+    Object.assign(p, { problems: set.problems, from: set.from, idx: 0, results: [], saved: false });
+    resetQ(p);
     p.seen.push(...p.problems.map((x) => x.question));
     renderPractice(n.id);
   });
@@ -632,7 +688,7 @@ function renderBank() {
       ${state.custom.length ? `<div class="unit-list">${state.custom.map((u) => `
         <div class="unit-item static">${subjChip(u.subject)} <span class="band ${u.band}">${BANDS[u.band]}</span> ${esc(u.title)} <small class="muted">${u.p?.length || 0}문제</small>
         <button class="btn small danger ghost" data-del="${u.id}">삭제</button></div>`).join("")}</div>`
-        : `<p class="muted">아직 추가한 단원이 없어요. 기본 단원 ${unitsFor("math").length + unitsFor("korean").length + unitsFor("english").length + unitsFor("social").length + unitsFor("science").length}개가 들어 있어요.</p>`}
+        : `<p class="muted">아직 추가한 단원이 없어요. 기본 단원 ${SUBJECT_KEYS.reduce((s, k) => s + unitsFor(k).length, 0)}개가 들어 있어요.</p>`}
     </section>
     <section class="card">
       <h3>➕ 새 단원 추가</h3>
@@ -653,7 +709,7 @@ function renderBank() {
     </section>
   `, "settings");
   $app.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
-    if (!confirm("이 단원을 삭제할까요?")) return;
+    if (!(await confirmBox("이 단원을 삭제할까요?", "문제은행에서 사라져요.", "삭제", true))) return;
     await DB.deleteCustomUnit(b.dataset.del);
     state.custom = state.custom.filter((u) => u.id !== b.dataset.del);
     renderBank();
@@ -681,14 +737,14 @@ function renderBank() {
 if (DB.isConfigured) {
   initAI(DB.app);
   DB.watchAuth(async (user) => {
-    if (!user) { Object.assign(state, { uid: null, profile: null, notes: [], practice: null, draft: null }); return render(); }
+    if (!user) { Object.assign(state, { uid: null, profile: null, notes: [], exams: [], practice: null, draft: null, exam: null }); return render(); }
     state.uid = user.uid;
     loading(true, "오답노트를 불러오는 중…");
     try {
       // 회원가입 직후에는 프로필 저장이 조금 늦을 수 있어 한 번 더 확인
       state.profile = await DB.getProfile(user.uid);
       if (!state.profile) { await new Promise((r) => setTimeout(r, 800)); state.profile = (await DB.getProfile(user.uid)) || { name: "학생", grade: "중1" }; }
-      [state.notes, state.custom] = await Promise.all([DB.listNotes(user.uid), DB.listCustomUnits()]);
+      [state.notes, state.custom, state.exams] = await Promise.all([DB.listNotes(user.uid), DB.listCustomUnits(), DB.listExams(user.uid).catch(() => [])]);
     } catch (e) { console.error(e); toast("불러오기 실패: Firestore 설정을 확인해 주세요."); }
     loading(false);
     render();

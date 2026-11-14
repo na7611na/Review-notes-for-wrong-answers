@@ -451,7 +451,7 @@ export const BANK = [
 ];
 
 // 공용 형식으로 바꿔 줌: { question, choices, answer, explanation }
-const norm = (p) => ({ question: p.q, choices: p.c, answer: p.a, explanation: p.e });
+const norm = (p) => ({ type: "choice", question: p.q, choices: p.c, answer: p.a, explanation: p.e });
 
 export function unitsFor(subject, customUnits = []) {
   return [...BANK, ...customUnits].filter((u) => u.subject === subject);
@@ -476,6 +476,6 @@ export function drawProblems(unit, n = 3, seen = []) {
   // 보기 순서도 섞어서 같은 문제라도 위치를 외우지 않게
   return fresh.slice(0, n).map((p) => {
     const order = shuffle(p.c.map((_, i) => i));
-    return { question: p.q, choices: order.map((i) => p.c[i]), answer: order.indexOf(p.a), explanation: p.e };
+    return { type: "choice", question: p.q, choices: order.map((i) => p.c[i]), answer: order.indexOf(p.a), explanation: p.e };
   });
 }
