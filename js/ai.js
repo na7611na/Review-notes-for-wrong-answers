@@ -103,6 +103,29 @@ export function correctAnswerOf(o) {
   return ans + (o.explanation ? `\n${o.explanation}` : "");
 }
 
+// ---------------------------------------------------------- 그림
+export function validBox(box) {
+  return Array.isArray(box) && box.length === 4 && box.every((v) => Number.isFinite(+v)) && +box[2] > +box[0] && +box[3] > +box[1] ? box.map(Number) : null;
+}
+/**
+ * 넉넉하게 자른 그림 사진에서
+ *  box: 인쇄된 그림만 꽉 맞는 영역, marks: 지워도 되는 학생 손글씨 영역들 (모두 이 사진 기준 0~1000)
+ */
+export async function refineFigure(imageBase64) {
+  const data = await run([`사진은 시험지에서 그림 부분을 넉넉하게 잘라 낸 것이에요.
+1. box: 이 안에서 "인쇄된 그림"(도형·그래프의 선, 그림 속에 인쇄된 길이·이름·숫자)만 꽉 맞게 감싸는 영역
+   - 문제 글 줄, 보기, 다른 문제의 글자는 넣지 않아요. 여백은 아주 조금만 둬요.
+2. marks: 학생이 펜·연필로 직접 쓴 글씨·숫자·화살표·밑줄·동그라미가 있는 영역들
+   - 인쇄된 글자(활자체, 예: "6 cm", "A")는 절대 넣지 않아요. 손글씨만 넣어요.
+   - 인쇄된 그림 선과 겹치는 손글씨는 넣지 않아요 (지우면 그림 선도 지워져요).
+   - 없으면 빈 배열이에요.
+JSON 형식: {"box":[ymin, xmin, ymax, xmax], "marks":[[ymin, xmin, ymax, xmax]]} (이 사진 전체를 0~1000으로 본 값)`, { inlineData: { data: imageBase64, mimeType: "image/jpeg" } }]);
+  const marks = (Array.isArray(data.marks) ? data.marks : []).map(validBox).filter(Boolean)
+    // 너무 큰 영역은 잘못 찾은 것일 수 있어 지우지 않는다
+    .filter((m) => ((m[2] - m[0]) * (m[3] - m[1])) / 1e6 < 0.15);
+  return { box: validBox(data.box), marks };
+}
+
 // ---------------------------------------------------------- 동일 유형 검사
 // 숫자는 #로 바꾸고 띄어쓰기를 지운 뒤 두 글자씩 비교 (숫자만 바꾼 문제는 거의 1.0)
 const shape = (t) => String(t || "").replace(/[0-9０-９]+(\.[0-9]+)?/g, "#").replace(/\s+/g, "");
@@ -153,6 +176,7 @@ ${feedback}
 ${SAME_TYPE}
 - 원래 문제의 문장을 거의 그대로 두세요. 단순 계산 문제나 다른 유형의 문제로 바꾸면 안 돼요.
 - changed에는 원래 문제에서 무엇을 바꿨는지 짧게 써요 (예: "3→5, 10→12").
+${original.hasFigure ? `- 원래 문제에 그림이 있어요. 학생은 원래 그림을 보며 풀어요. 그림의 모양은 그대로 두고, 그림에 적힌 숫자 대신 문제 글의 숫자를 바꿔요.` : ""}
 
 ${FORMAT_HELP}
 ${STYLE}
@@ -188,10 +212,12 @@ ${chapter ? `학생이 고른 단원: ${chapter} (chapter에는 이 이름을 �
 2. original: 사진 속 문제를 "새 시험지"에 실을 수 있게 처음부터 다시 입력한 문서
    - 채점 표시(○, ✕, 빗금, 체크, 동그라미, 점수)와 학생이 쓴 답·풀이·밑줄·낙서는 모두 빼고, 인쇄된 문제만 옮겨요.
    - 문제 번호(예: "3.")는 빼요. 지문·<보기>·조건·단위는 한 글자도 빠짐없이 그대로 옮겨요.
-   - 표는 글로 옮겨요 (예: "| 시간(분) | 0 | 1 | 2 |" 처럼 한 줄씩).
+   - 표는 question 안에 한 줄에 한 행씩 "| 칸 | 칸 |" 형식으로 옮겨요. 첫 행이 제목 행이면 그 다음 줄에 "|---|---|"를 넣어요. 표는 그림(hasFigure)으로 치지 않아요.
    - <보기>가 있으면 "<보기>" 한 줄 다음에 "ㄱ. 내용", "ㄴ. 내용"처럼 항목을 한 줄에 하나씩 써요.
    - hasFigure: 글로 옮길 수 없는 그림·도형·그래프·지도가 있으면 true
-   - figureBox: hasFigure가 true일 때 그 그림만 감싸는 영역 [ymin, xmin, ymax, xmax] (사진 전체를 0~1000으로 본 값). 없으면 null
+   - figureBox: 인쇄된 그림만 꽉 맞게 감싸는 영역 [ymin, xmin, ymax, xmax] (사진 전체를 0~1000으로 본 값).
+     문제 글·보기·다른 문제·학생 필기는 넣지 않고, 그림의 선과 그림 속 인쇄된 글자(길이, 꼭짓점 이름 등)만 넣어요. 없으면 null
+   - 그림이 있으면 question 끝에 그림이 무엇인지 쓰지 않아도 돼요 (그림은 사진에서 잘라 붙여요).
    - answer와 explanation은 이 문제의 정답과 풀이예요. 학생이 쓴 답이 아니라 올바른 정답이에요.
 3. unit: 이 문제의 세부 유형 이름 (짧게, 예: "일차방정식의 활용 - 거리·속력·시간")
 4. chapter: 교과서 단원 이름 (예: "일차방정식", "현재완료", "광합성")
@@ -216,8 +242,7 @@ JSON 형식:
   const original = cleanProblem(data.original);
   if (!data.readable || !original || !data.concept) throw new Error("UNREADABLE");
   original.hasFigure = !!data.original.hasFigure;
-  const box = data.original.figureBox;
-  original.figureBox = original.hasFigure && Array.isArray(box) && box.length === 4 && box.every((v) => Number.isFinite(+v)) ? box.map(Number) : null;
+  original.figureBox = original.hasFigure ? validBox(data.original.figureBox) : null;
   const unit = String(data.unit || "");
   const problems = await sameTypeProblems({ original, subject, grade, unit });
   return {

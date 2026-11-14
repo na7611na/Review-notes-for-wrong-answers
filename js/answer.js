@@ -142,12 +142,26 @@ function bogiBox(items, titled) {
   return `<div class="bogi">${titled ? `<div class="bogi-title">보기</div>` : ""}<div class="bogi-items ${two ? "two" : ""}">${items
     .map((it) => `<div class="bogi-item"><b>${esc(label(it.label))}</b><span>${esc(it.text)}</span></div>`).join("")}</div></div>`;
 }
+// "| 칸 | 칸 |" 줄들을 표로 (다음 줄이 |---| 이면 첫 줄은 제목 행)
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+function tableHtml(rows) {
+  const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const head = rows.length > 1 && TABLE_SEP.test(rows[1]);
+  const body = rows.filter((r, i) => !(head && i === 1));
+  return `<div class="rt-table-wrap"><table class="rt-table">${body.map((r, i) => `<tr>${cells(r).map((c) => (head && i === 0 ? `<th>${esc(c)}</th>` : `<td>${esc(c)}</td>`)).join("")}</tr>`).join("")}</table></div>`;
+}
+
 export function richText(text) {
   const lines = String(text ?? "").split("\n");
   const out = [];
   let buf = [];
   const flush = () => { if (buf.length) out.push(`<span class="rt-text">${esc(buf.join("\n").replace(/^\n+|\n+$/g, ""))}</span>`); buf = []; };
   for (let i = 0; i < lines.length; i++) {
+    if (TABLE_ROW.test(lines[i]) && TABLE_ROW.test(lines[i + 1] || "")) {
+      let j = i; while (j < lines.length && TABLE_ROW.test(lines[j])) j++;
+      flush(); out.push(tableHtml(lines.slice(i, j))); i = j - 1; continue;
+    }
     const titled = BOGI_HEAD.test(lines[i]);
     let j = titled ? i + 1 : i;
     while (j < lines.length && !lines[j].trim() && titled) j++; // 제목 아래 빈 줄 건너뛰기
@@ -164,6 +178,12 @@ export function richText(text) {
   }
   flush();
   return out.join("");
+}
+
+// ---------- 그림
+/** 그림 한 개 (사진에서 잘라 정리한 그림) */
+export function figureHtml({ img, cls = "" } = {}) {
+  return img ? `<div class="fig ${cls}"><img src="${img}" alt="그림"></div>` : "";
 }
 
 // 화면에서 보기를 한 줄에 2개씩 놓아도 될 만큼 짧은지
