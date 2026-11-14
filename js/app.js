@@ -314,11 +314,12 @@ function renderNew(subject) {
     </section>
 
     <section class="card step ${d.subject ? "" : "disabled"}">
-      <h3><span class="num">4</span>왜 틀렸을까요? <small class="muted">(여러 개 선택 가능)</small></h3>
-      ${d.subject ? `<div class="check-list">
-        ${reasons.map((r) => `<label class="check"><input type="checkbox" value="${esc(r)}" ${d.reasons.includes(r) ? "checked" : ""} data-reason><span>${esc(r)}</span></label>`).join("")}
+      <h3><span class="num">4</span>왜 틀렸을까요? <small class="muted">(여러 개 선택)</small></h3>
+      ${d.subject ? `<div class="reason-chips">
+        ${reasons.map((r) => `<label class="rchip"><input type="checkbox" value="${esc(r)}" ${d.reasons.includes(r) ? "checked" : ""} data-reason><span>${esc(r)}</span></label>`).join("")}
+        <label class="rchip"><input type="checkbox" ${d.etcOn ? "checked" : ""} data-etcon><span>기타</span></label>
       </div>
-      <input class="etc" placeholder="기타 이유를 직접 써도 좋아요" value="${esc(d.etc)}" data-etc>` : `<p class="muted">과목을 먼저 골라 주세요.</p>`}
+      ${d.etcOn ? `<input class="etc" placeholder="기타 이유를 짧게 써요" maxlength="30" value="${esc(d.etc)}" data-etc>` : ""}` : `<p class="muted">과목을 먼저 골라 주세요.</p>`}
     </section>
 
     <section class="card step">
@@ -330,7 +331,7 @@ function renderNew(subject) {
   `);
 
   $app.querySelectorAll("[data-subj]").forEach((b) => b.onclick = () => {
-    if (d.subject !== b.dataset.subj) { d.subject = b.dataset.subj; d.reasons = []; d.chapter = ""; d.term = null; }
+    if (d.subject !== b.dataset.subj) { d.subject = b.dataset.subj; d.reasons = []; d.etcOn = false; d.etc = ""; d.chapter = ""; d.term = null; }
     renderNew();
   });
   if (d.subject) mountChapterPicker($app.querySelector("#chapterBox"), d.subject, d);
@@ -343,6 +344,11 @@ function renderNew(subject) {
   $app.querySelector("[data-recrop]")?.addEventListener("click", () => cropInto(d, d.src));
   $app.querySelectorAll("[data-reason]").forEach((c) => c.onchange = () => {
     d.reasons = [...$app.querySelectorAll("[data-reason]:checked")].map((x) => x.value);
+  });
+  $app.querySelector("[data-etcon]")?.addEventListener("change", (e) => {
+    d.etcOn = e.target.checked; if (!d.etcOn) d.etc = "";
+    const y = window.scrollY; renderNew(); window.scrollTo(0, y);
+    if (d.etcOn) $app.querySelector("[data-etc]")?.focus();
   });
   const etc = $app.querySelector("[data-etc]"); if (etc) etc.oninput = () => (d.etc = etc.value);
   $app.querySelector("[data-memo]").oninput = (e) => (d.memo = e.target.value);
