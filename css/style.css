@@ -326,13 +326,7 @@ input.answer-text { font-weight: 600; }
 .self-check .ok.on { border-color: var(--ok); background: var(--ok); color: #fff; }
 .self-check .no.on { border-color: var(--no); background: var(--no); color: #fff; }
 
-/* 지우개 */
-.modal.wide { width: min(900px, 100%); }
-.eraser-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; margin: 10px 0; font-size: .9rem; font-weight: 600; }
-.eraser-tools label { display: flex; align-items: center; gap: 6px; }
-.eraser-tools input[type=range] { width: 110px; padding: 0; accent-color: var(--primary); }
-.eraser-wrap { background: #EDE9E2; border-radius: 14px; padding: 6px; margin-bottom: 14px; max-height: 62vh; overflow: auto; }
-.eraser-wrap canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; border-radius: 8px; }
+.modal.wide { width: min(640px, 100%); }
 
 /* 인쇄 화면 */
 body.print-mode { background: #EDEAE4; }
@@ -388,3 +382,26 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .etc-box p { margin: 0; }
 .picked { margin: 4px 0 0; font-size: .92rem; color: #D65A3A; }
 .link { border: 0; background: none; color: var(--muted); text-decoration: underline; font: inherit; font-size: .85rem; cursor: pointer; }
+
+/* AI가 다시 입력한 문제 (문서) */
+.doc h3 small { font-weight: 500; font-size: .78rem; }
+.doc h3 .btn { margin-left: auto; }
+.doc-q { white-space: pre-wrap; font-size: 1.05rem; line-height: 1.7; margin: 0 0 12px; background: #FCFBF8; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.doc-fig { margin: 0 0 12px; text-align: center; }
+.doc-fig img, .ei-fig { max-width: 100%; max-height: 360px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+.ei-fig { display: block; margin: -6px auto 14px; }
+.doc-choices { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; }
+.doc-choices li { display: flex; gap: 8px; padding: 8px 12px; border-radius: 10px; background: #FAF8F4; }
+.doc-choices span { font-weight: 800; color: var(--muted); }
+.spinner.small { width: 26px; height: 26px; border-width: 3px; margin: 10px auto; }
+.p-fig { display: block; max-width: 70%; max-height: 70mm; margin: 6px 0; }
+
+/* 저장된 문제 보관함 */
+.vault { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.vault-card { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 10px; align-items: center; background: var(--card); border-radius: 16px; box-shadow: var(--shadow); padding: 12px; border-left: 4px solid var(--sc); }
+.vault-card .s-icon { grid-row: span 2; font-size: 1.3rem; background: var(--ss); width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; }
+.vault-card small { color: var(--muted); font-size: .76rem; }
+.sec-title small { font-weight: 500; font-size: .78rem; margin-left: 4px; }
+
+/* 세로 버튼 묶음 */
+.btn-col { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }

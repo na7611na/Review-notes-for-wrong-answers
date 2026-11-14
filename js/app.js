@@ -1,10 +1,9 @@
 import { SUBJECTS, SUBJECT_KEYS, GRADES, BANDS, bandOf, REASONS, ENCOURAGE, PRAISE, pick } from "./data.js";
 import { unitsFor, findUnit, drawProblems } from "./bank.js";
 import * as DB from "./db.js";
-import { initAI, analyzeProblem, moreProblems } from "./ai.js";
+import { initAI, analyzeProblem, moreProblems, cleanProblem } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
 import { typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
-import { openEraser } from "./eraser.js";
 import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
 import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
 
@@ -38,6 +37,27 @@ const aiFields = (r) => ({
   unit: r.unit, chapter: r.chapter, aiChapter: r.chapter, concept: r.concept, firstSet: r.problems,
 });
 
+// AI가 알려 준 그림 영역([ymin, xmin, ymax, xmax], 0~1000)만 사진에서 잘라낸다
+async function cropFigure(src, box) {
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+  const [y0, x0, y1, x1] = box.map((v) => Math.min(1000, Math.max(0, v)) / 1000);
+  const pad = 0.015;
+  const sx = Math.max(0, x0 - pad) * img.width, sy = Math.max(0, y0 - pad) * img.height;
+  const sw = Math.min(1, x1 + pad) * img.width - sx, sh = Math.min(1, y1 + pad) * img.height - sy;
+  if (sw < 20 || sh < 20) return null;
+  const c = document.createElement("canvas");
+  c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.85);
+}
+
+// 사진을 AI로 분석해 오답노트에 저장할 값 + 잘라낸 그림을 돌려준다 (실패하면 예외)
+async function runAnalysis({ image, subject, reasons, memo, chapter }) {
+  const r = await analyzeProblem({ imageBase64: image.split(",")[1], subject, grade: state.profile?.grade || "중1", reasons, memo, bankUnits: unitsFor(subject, state.custom), chapter });
+  const figure = r.original.figureBox ? await cropFigure(image, r.original.figureBox).catch(() => null) : null;
+  return { fields: { ...aiFields(r), bankUnitId: r.bankUnitId, hasFigureImg: !!figure }, figure };
+}
+
 // AI가 실패한 까닭을 알기 쉽게
 function aiErrorMessage(e) {
   const m = String(e?.message || e);
@@ -45,6 +65,8 @@ function aiErrorMessage(e) {
   if (/429|quota|RESOURCE_EXHAUSTED/i.test(m)) return "오늘 AI 무료 사용량을 다 썼어요.";
   if (/403|permission|API has not been used|disabled|PERMISSION_DENIED|api-not-enabled/i.test(m)) return "Firebase AI Logic(5단계) 설정을 확인해 주세요.";
   if (/network|fetch|Failed to fetch/i.test(m)) return "인터넷 연결을 확인해 주세요.";
+  if (/genai config not found/i.test(m)) return "Firebase AI Logic 설정이 끝나지 않았어요 (콘솔 > AI Logic에서 Gemini Developer API 설정 완료).";
+  if (m.includes("NOT_SAME_TYPE")) return "AI가 원래 문제와 같은 유형의 문제를 만들지 못했어요.";
   if (/404|not found/i.test(m)) return "AI 모델 이름을 찾지 못했어요(설정 파일의 AI_MODELS 확인).";
   return "AI가 지금은 문제를 분석하지 못했어요 (" + m.slice(0, 80) + ").";
 }
@@ -116,7 +138,7 @@ async function render() {
     case "note": return renderNote(id);
     case "practice": return renderPractice(id);
     case "exams": return renderExams();
-    case "exam-new": return renderExamNew();
+    case "exam-new": return renderExamNew({ subject: params.get("subject") || undefined });
     case "exam": return renderExam(id);
     case "print": return renderPrint(id);
     case "settings": return renderSettings();
@@ -332,25 +354,19 @@ async function saveDraft() {
     subject: d.subject, thumb: d.thumb, reasons, memo: d.memo.trim(), status: "learning",
     rounds: 0, totalSolved: 0, totalCorrect: 0, createdAt: Date.now(),
   };
-  const grade = state.profile?.grade || "중1";
-  const bankUnits = unitsFor(d.subject, state.custom);
-
-  loading(true, "AI 선생님이 문제를 살펴보고 있어요… 🔍");
-  let note = null, aiError = "";
+  loading(true, "AI가 문제를 다시 입력하고 동일 유형 문제를 만드는 중… 🔍");
+  let note = null, figure = null, aiError = "";
   try {
-    const r = await analyzeProblem({ imageBase64: d.image.split(",")[1], subject: d.subject, grade, reasons, memo: d.memo, bankUnits, chapter: d.chapter });
-    note = { ...base, ...aiFields(r), bankUnitId: r.bankUnitId };
+    const r = await runAnalysis({ image: d.image, subject: d.subject, reasons, memo: d.memo, chapter: d.chapter });
+    note = { ...base, ...r.fields }; figure = r.figure;
   } catch (e) {
     console.warn("AI 분석 실패", e);
     aiError = aiErrorMessage(e);
   }
   loading(false);
 
-  if (!note) {
-    // AI를 못 쓰면 고른 단원으로 기록만 하고, 연습은 비슷한 문제은행 단원으로 한다
-    const bank = d.chapter && bankUnits.find((u) => u.title.includes(d.chapter) || d.chapter.includes(u.title.split(" ")[0]));
-    note = { ...base, source: "none", unit: d.chapter || "", concept: bank?.concept || null, bankUnitId: bank?.id || null };
-  }
+  // AI를 못 쓰면 사진과 단원만 기록해 두고, 나중에 "AI로 다시 분석"
+  if (!note) note = { ...base, source: "none", unit: d.chapter || "", concept: null, bankUnitId: null };
   // 직접 고른 단원이 있으면 그 단원으로 분류
   if (d.chapter) { note.chapter = d.chapter; note.term = d.term || null; }
 
@@ -358,11 +374,12 @@ async function saveDraft() {
   try {
     if (d.chapter && !d.term) await rememberChapter(d.subject, d.chapter);
     const id = await DB.createNote(state.uid, note, d.image);
+    if (figure) await DB.saveFigure(state.uid, id, figure);
     state.notes.unshift({ id, ...note });
     state.draft = null;
     loading(false);
-    if (aiError) toast(`📒 기록했어요. ${aiError} 나중에 "AI로 다시 분석"을 눌러 주세요.`, 6000);
-    else toast("오답노트에 기록했어요 📒");
+    if (aiError) toast(`📒 기록했어요. ${aiError} 나중에 "🤖 AI로 분석하기"를 눌러 주세요.`, 6000);
+    else toast("📒 기록했어요. AI가 옮겨 쓴 문제는 맞춤형 문제에도 저장됐어요.", 3500);
     go(`#/note/${id}`);
   } catch (e) {
     loading(false);
@@ -395,7 +412,15 @@ function pickBankUnit(subject, message, allowNone = false) {
 }
 
 // ---------------------------------------------------------- 오답 상세
-async function renderNote(id, showClean = true) {
+// AI가 옮겨 쓴 문제를 문서처럼 보여 준다
+function docHtml(o, figure = false) {
+  return `<p class="doc-q">${esc(o.question)}</p>
+    ${figure ? `<div class="doc-fig" id="figBox"><div class="spinner small"></div></div>` : ""}
+    ${typeOf(o) === "choice" ? `<ol class="doc-choices">${o.choices.map((c, i) => `<li><span>${"①②③④⑤"[i]}</span>${esc(c)}</li>`).join("")}</ol>` : ""}
+    ${o.hasFigure && !figure ? `<p class="warn small">그림이 있는 문제예요. 그림은 아래 원본 사진에서 확인해요.</p>` : ""}`;
+}
+
+async function renderNote(id) {
   const n = noteById(id);
   if (!n) return go("#/home");
   const s = SUBJECTS[n.subject];
@@ -408,13 +433,17 @@ async function renderNote(id, showClean = true) {
     </header>
     <div class="status-row">${statusBadge(n)}${n.rounds ? `<span class="muted">연습 ${n.rounds}회 · 정답률 ${Math.round((n.totalCorrect / Math.max(1, n.totalSolved)) * 100)}%</span>` : ""}</div>
 
-    <section class="card">
-      <h3>📸 틀린 문제 ${n.hasClean ? `<span class="seg mini"><button class="${showClean ? "on" : ""}" data-view="clean">지운 사진</button><button class="${showClean ? "" : "on"}" data-view="orig">원본</button></span>` : ""}</h3>
+    ${n.original ? `<section class="card doc">
+      <h3>📄 다시 입력한 문제 <small class="muted">채점 표시 없이 · 맞춤형 문제에 저장됨</small><button class="btn small" id="editDoc">✏️ 고치기</button></h3>
+      ${docHtml(n.original, n.hasFigureImg)}
+      <details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(answerText(n.original))}${n.original.explanation ? "\n" + esc(n.original.explanation) : ""}</p></details>
+      <details class="fold" id="origFold"><summary>📸 원본 사진 보기</summary><div class="photo-preview" id="photo"><img src="${n.thumb}" alt="문제 사진" class="blur"></div></details>
+    </section>` : `<section class="card">
+      <h3>📸 틀린 문제</h3>
       <div class="photo-preview" id="photo"><img src="${n.thumb}" alt="문제 사진" class="blur"></div>
-      <button class="btn full" id="erase">🧽 채점 표시 지우기 <small class="muted">(맞춤형 문제·인쇄용)</small></button>
-      ${n.problemText ? `<details class="fold"><summary>문제 글로 보기 (채점 표시 없이)</summary><p class="pre">${esc(n.problemText)}</p></details>` : ""}
-      ${n.correctAnswer ? `<details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(n.correctAnswer)}</p></details>` : ""}
-    </section>
+      <p class="warn">아직 AI가 이 문제를 문서로 옮기지 못했어요. AI로 분석하면 채점 표시 없이 다시 입력되고, 맞춤형 문제에 저장돼요.</p>
+      <button class="btn primary full" id="reAI">🤖 AI로 분석하기</button>
+    </section>`}
 
     <section class="card">
       <h3>🤔 내가 틀린 이유</h3>
@@ -430,39 +459,26 @@ async function renderNote(id, showClean = true) {
       ${c.tip ? `<div class="tip"><b>TIP</b> ${esc(c.tip)}</div>` : ""}
     </section>` : `<section class="card">
       <h3>💡 핵심 개념</h3>
-      <p class="muted">아직 개념 정리가 없어요. AI로 다시 분석하거나 문제은행 단원을 골라 주세요.</p>
+      <p class="muted">아직 개념 정리가 없어요. 위의 🤖 AI로 분석하기를 눌러 주세요.</p>
     </section>`}
 
     <button class="btn primary big full" id="practice">${n.status === "done" ? "🔁 동일 유형 문제 연습" : "✏️ 동일 유형 문제 풀기"}</button>
     <div class="btn-row sub">
       <button class="btn" id="chChapter">📂 단원 바꾸기</button>
-      ${!n.original ? `<button class="btn" id="reAI">🤖 AI로 다시 분석</button>` : ""}
       <button class="btn" id="pickUnit">📚 문제은행 단원 ${n.bankUnitId ? "바꾸기" : "연결"}</button>
       <button class="btn danger ghost" id="del">🗑️ 삭제</button>
     </div>
   `);
 
-  const loadPhoto = async () => (showClean && n.hasClean && (await DB.getCleanImage(state.uid, id))) || DB.getImage(state.uid, id);
-  loadPhoto().then((img) => {
+  const showPhoto = () => DB.getImage(state.uid, id).then((img) => {
     const box = $app.querySelector("#photo");
     if (img && box) { box.innerHTML = `<img src="${img}" alt="문제 사진">`; box.onclick = () => modal(`<img class="full-img" src="${img}" alt=""><button class="btn full" data-close>닫기</button>`); }
   });
-  $app.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => renderNote(id, b.dataset.view === "clean"));
+  const fold = $app.querySelector("#origFold");
+  if (fold) fold.addEventListener("toggle", () => fold.open && showPhoto(), { once: true }); else showPhoto();
+  if (n.hasFigureImg) DB.getFigure(state.uid, id).then((img) => { const b = $app.querySelector("#figBox"); if (b) b.innerHTML = img ? `<img src="${img}" alt="그림">` : ""; });
+  $app.querySelector("#editDoc")?.addEventListener("click", () => editDocument(n));
 
-  $app.querySelector("#erase").onclick = async () => {
-    const src = (n.hasClean && (await DB.getCleanImage(state.uid, id))) || (await DB.getImage(state.uid, id));
-    if (!src) return toast("사진을 불러오지 못했어요.");
-    const cleaned = await openEraser(src);
-    if (!cleaned) return;
-    loading(true, "저장하는 중…");
-    try {
-      await DB.saveCleanImage(state.uid, id, cleaned);
-      if (!n.hasClean) { await DB.updateNote(state.uid, id, { hasClean: true }); n.hasClean = true; }
-      forgetImage(id);
-      toast("채점 표시를 지운 사진을 저장했어요 ✨");
-    } catch (e) { toast("저장하지 못했어요: " + e.message); }
-    loading(false); renderNote(id, true);
-  };
   $app.querySelector("#chChapter").onclick = () => {
     const sel = { term: n.term || null, chapter: n.chapter || "" };
     modal(`<h3>📂 단원 바꾸기</h3><p class="muted center small">맞춤형 문제는 이 단원으로 묶여요.</p><div id="chBox"></div>
@@ -479,7 +495,6 @@ async function renderNote(id, showClean = true) {
     });
   };
   $app.querySelector("#practice").onclick = () => {
-    if (!n.firstSet?.length && !n.bankUnitId && n.source !== "ai") return toast("먼저 AI로 분석하거나 문제은행 단원을 연결해 주세요.");
     state.practice = null;
     go(`#/practice/${id}`);
   };
@@ -490,19 +505,7 @@ async function renderNote(id, showClean = true) {
     await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
     toast("단원을 연결했어요."); renderNote(id);
   };
-  $app.querySelector("#reAI")?.addEventListener("click", async () => {
-    const img = await DB.getImage(state.uid, id);
-    if (!img) return toast("사진을 불러오지 못했어요.");
-    loading(true, "AI 선생님이 문제를 살펴보고 있어요… 🔍");
-    try {
-      const r = await analyzeProblem({ imageBase64: img.split(",")[1], subject: n.subject, grade: state.profile?.grade, reasons: n.reasons, memo: n.memo, bankUnits: unitsFor(n.subject, state.custom), chapter: n.chapter });
-      const patch = { ...aiFields(r), bankUnitId: n.bankUnitId || r.bankUnitId };
-      if (n.term || (n.chapter && n.chapter !== n.aiChapter && n.chapter !== n.unit)) patch.chapter = n.chapter;
-      await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
-      toast("분석을 마쳤어요 ✨");
-    } catch (e) { console.warn(e); toast("AI가 아직 분석하지 못했어요. 잠시 후 다시 해 주세요."); }
-    loading(false); renderNote(id);
-  });
+  $app.querySelector("#reAI")?.addEventListener("click", async () => { await reanalyze(n); renderNote(id); });
   $app.querySelector("#del").onclick = async () => {
     if (!(await confirmBox("이 오답 기록을 삭제할까요?", "삭제하면 되돌릴 수 없어요.", "삭제", true))) return;
     loading(true, "삭제하는 중…");
@@ -512,23 +515,100 @@ async function renderNote(id, showClean = true) {
   };
 }
 
-// ---------------------------------------------------------- 동일 유형 문제 풀기
-async function nextSet(n, p) {
-  // 1라운드는 처음 분석 때 만든 문제, 그다음은 AI → 문제은행 순서로 새 문제를 가져온다
-  if (p.round === 1 && n.firstSet?.length) return { problems: n.firstSet, from: "ai" };
-  if (n.source === "ai") {
-    try {
-      const problems = await moreProblems({ note: n, grade: state.profile?.grade, seen: p.seen, wrongCount: p.lastWrong });
-      return { problems, from: "ai" };
-    } catch (e) { console.warn("AI 추가 문제 실패", e); }
+// 저장된 사진을 AI로 다시 분석 (성공하면 true)
+async function reanalyze(n) {
+  const img = await DB.getImage(state.uid, n.id);
+  if (!img) { toast("사진을 불러오지 못했어요."); return false; }
+  loading(true, "AI가 문제를 다시 입력하고 동일 유형 문제를 만드는 중… 🔍");
+  try {
+    const r = await runAnalysis({ image: img, subject: n.subject, reasons: n.reasons || [], memo: n.memo, chapter: n.chapter });
+    const patch = { ...r.fields, bankUnitId: n.bankUnitId || r.fields.bankUnitId };
+    if (n.term || (n.chapter && n.chapter !== n.aiChapter && n.chapter !== n.unit)) patch.chapter = n.chapter;
+    if (r.figure) await DB.saveFigure(state.uid, n.id, r.figure);
+    await DB.updateNote(state.uid, n.id, patch); Object.assign(n, patch);
+    forgetImage(n.id);
+    loading(false); toast("분석을 마쳤어요 ✨ 맞춤형 문제에도 저장됐어요.");
+    return true;
+  } catch (e) {
+    console.warn(e); loading(false);
+    toast(aiErrorMessage(e), 6000);
+    return false;
   }
-  const unit = n.bankUnitId && findUnit(n.bankUnitId, state.custom);
-  if (unit) return { problems: drawProblems(unit, 3, p.seen), from: "bank" };
-  return null;
+}
+
+// AI가 잘못 읽은 글자를 직접 고친다
+function editDocument(n) {
+  const o = n.original, t = typeOf(o);
+  modal(`<h3>✏️ 문제 고치기</h3>
+    <form class="form" id="docForm">
+      <label>문제<textarea name="question" rows="5">${esc(o.question)}</textarea></label>
+      ${t === "choice" ? `<label>보기 (한 줄에 하나씩)<textarea name="choices" rows="5">${esc(o.choices.join("\n"))}</textarea></label>
+        <label>정답 번호<input name="answer" type="number" min="1" max="5" value="${o.answer + 1}"></label>`
+      : `<label>${t === "essay" ? "모범 답안" : "정답"}<input name="answer" value="${esc(o.answer)}"></label>`}
+      <label>풀이<textarea name="explanation" rows="3">${esc(o.explanation || "")}</textarea></label>
+      <p class="error" id="docErr"></p>
+      <div class="btn-row"><button class="btn primary" type="submit">저장</button><button class="btn ghost" type="button" data-close>취소</button></div>
+    </form>`, (el) => {
+    el.querySelector("#docForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      const fixed = cleanProblem({
+        type: t, question: f.question.trim(), explanation: f.explanation.trim(), accept: t === "short" && f.answer.trim() === String(o.answer) ? o.accept : [],
+        ...(t === "choice" ? { choices: f.choices.split("\n").map((x) => x.trim()).filter(Boolean), answer: Number(f.answer) - 1 } : { answer: f.answer.trim() }),
+      });
+      if (!fixed) { el.querySelector("#docErr").textContent = "문제, 보기(2~5개), 정답을 확인해 주세요."; return; }
+      Object.assign(fixed, { hasFigure: o.hasFigure, figureBox: o.figureBox || null });
+      const patch = {
+        original: fixed,
+        problemText: fixed.question + (fixed.choices ? "\n" + fixed.choices.map((c, i) => `${"①②③④⑤"[i]} ${c}`).join("\n") : ""),
+        correctAnswer: answerText(fixed) + (fixed.explanation ? `\n${fixed.explanation}` : ""),
+      };
+      await DB.updateNote(state.uid, n.id, patch); Object.assign(n, patch);
+      el.remove(); toast("고쳤어요."); renderNote(n.id);
+    };
+  }, "wide");
+}
+
+// ---------------------------------------------------------- 동일 유형 문제 풀기
+// 1라운드는 처음 분석 때 만든 문제, 그다음은 AI가 원래 문제의 숫자·보기만 바꿔 새로 만든다
+async function nextSet(n, p) {
+  if (p.round === 1 && n.firstSet?.length) return { problems: n.firstSet, from: "ai" };
+  if (!n.original) return { error: "아직 AI가 이 문제를 분석하지 못해서 동일 유형 문제를 만들 수 없어요." };
+  try {
+    return { problems: await moreProblems({ note: n, grade: state.profile?.grade, seen: p.seen, wrongCount: p.lastWrong }), from: "ai" };
+  } catch (e) { console.warn("AI 추가 문제 실패", e); return { error: aiErrorMessage(e) }; }
+}
+
+// 동일 유형 문제를 못 만들었을 때: 다시 시도 / AI 분석 / (동일 유형이 아닌) 문제은행 중에서 직접 고른다
+function fallbackChoice(n, reason) {
+  return new Promise((resolve) => {
+    let picked = null;
+    const m = modal(`<h3>동일 유형 문제를 만들지 못했어요</h3>
+      <p class="muted center">${esc(reason)}</p>
+      <div class="btn-col">
+        ${n.original ? `<button class="btn primary" data-pick="retry">🔄 다시 시도</button>` : `<button class="btn primary" data-pick="ai">🤖 AI로 분석하기</button>`}
+        <button class="btn" data-pick="bank">📚 문제은행 기본 문제로 연습 <small class="muted">(동일 유형 아님)</small></button>
+        <button class="btn ghost" data-close>닫기</button>
+      </div>`, (el) => el.querySelectorAll("[data-pick]").forEach((b) => b.onclick = () => { picked = b.dataset.pick; el.remove(); }));
+    new MutationObserver((_, obs) => { if (!document.body.contains(m)) { obs.disconnect(); resolve(picked); } }).observe(document.body, { childList: true });
+  });
+}
+
+async function getSet(n, p) {
+  for (;;) {
+    loading(true, p.round === 1 ? "문제를 준비하는 중… ✏️" : "숫자를 바꾼 새 문제를 만드는 중… ✏️");
+    const r = await nextSet(n, p);
+    loading(false);
+    if (r.problems) return r;
+    const pick = await fallbackChoice(n, r.error);
+    if (pick === "bank") return askBankSet(n, p.seen);
+    if (pick === "ai") await reanalyze(n);
+    if (!pick) return null;
+  }
 }
 
 async function askBankSet(n, seen) {
-  const u = await pickBankUnit(n.subject, "AI가 지금은 새 문제를 만들지 못했어요.<br>연습할 문제은행 단원을 골라 주세요.");
+  const u = await pickBankUnit(n.subject, "AI 없이 문제은행의 기본 문제로 연습해요.<br>비슷한 단원을 골라 주세요. (원래 문제와 같은 유형은 아니에요)");
   if (!u) return null;
   await DB.updateNote(state.uid, n.id, { bankUnitId: u.id }); n.bankUnitId = u.id;
   return { problems: drawProblems(u, 3, seen), from: "bank" };
@@ -542,9 +622,7 @@ async function renderPractice(id) {
   let p = state.practice;
   if (!p || p.noteId !== id) {
     p = state.practice = { noteId: id, round: 1, problems: [], idx: 0, results: [], seen: [], lastWrong: 0, a: {}, checked: false };
-    loading(true, "문제를 준비하는 중… ✏️");
-    const set = (await nextSet(n, p)) || (loading(false), await askBankSet(n, []));
-    loading(false);
+    const set = await getSet(n, p);
     if (!set) { state.practice = null; return go(`#/note/${id}`); }
     p.problems = set.problems; p.from = set.from;
     p.seen.push(...p.problems.map((x) => x.question));
@@ -560,7 +638,7 @@ async function renderPractice(id) {
     <header class="subject-head" style="${subjVars(n.subject)}">
       <a href="#/note/${id}" class="back">‹</a>
       <span class="s-icon">${s.icon}</span>
-      <div><small>${esc(n.unit || s.name)}</small><h1>동일 유형 문제 ${p.round > 1 ? `· 추가 ${p.round - 1}회차` : ""}</h1></div>
+      <div><small>${esc(n.unit || s.name)}</small><h1>${p.from === "bank" ? "📚 문제은행 기본 문제" : "동일 유형 문제"} ${p.round > 1 ? `· 추가 ${p.round - 1}회차` : ""}</h1></div>
     </header>
     <div class="progress">
       ${p.problems.map((_, i) => `<span class="dot ${i < p.idx ? (p.results[i] ? "ok" : "no") : i === p.idx ? "now" : ""}"></span>`).join("")}
@@ -632,10 +710,8 @@ async function renderRoundResult(n, p) {
   $app.querySelector("#more")?.addEventListener("click", async () => {
     p.lastWrong = total - correct;
     p.round++;
-    loading(true, "새 문제를 만드는 중… ✏️");
-    let set = await nextSet(n, p);
-    loading(false);
-    if (!set) set = await askBankSet(n, p.seen);
+    const bankUnit = p.from === "bank" && findUnit(n.bankUnitId, state.custom);
+    const set = bankUnit ? { problems: drawProblems(bankUnit, 3, p.seen), from: "bank" } : await getSet(n, p);
     if (!set) { p.round--; return; }
     Object.assign(p, { problems: set.problems, from: set.from, idx: 0, results: [], saved: false });
     resetQ(p);

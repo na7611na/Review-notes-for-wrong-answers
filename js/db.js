@@ -4,7 +4,7 @@
 //   users/{uid}                 : 프로필 { loginId, name, grade }
 //   users/{uid}/notes/{noteId}  : 오답 기록 (작은 썸네일 포함)
 //   users/{uid}/images/{noteId} : 원본 사진 (압축본, 상세 화면에서만 불러옴)
-//   users/{uid}/images/{noteId}-clean : 지우개로 채점 표시를 지운 사진
+//   users/{uid}/images/{noteId}-fig : AI가 찾아 잘라낸 그림·도형 부분
 //   users/{uid}/exams/{examId}  : 맞춤형 문제(시험지)와 채점 결과
 //   bank/{unitId}               : 부모님이 추가한 문제은행 단원 (가족 공용)
 // ============================================================
@@ -83,6 +83,7 @@ export async function deleteNote(uid, id) {
   batch.delete(doc(db, "users", uid, "notes", id));
   batch.delete(doc(db, "users", uid, "images", id));
   batch.delete(doc(db, "users", uid, "images", `${id}-clean`));
+  batch.delete(doc(db, "users", uid, "images", `${id}-fig`));
   await batch.commit();
 }
 export async function getImage(uid, id) {
@@ -90,13 +91,12 @@ export async function getImage(uid, id) {
   return s.exists() ? s.data().data : null;
 }
 
-// 지우개로 채점 표시를 지운 사진 (원본과 따로 저장: 문서 하나당 1MB 제한)
-export async function getCleanImage(uid, id) {
-  const s = await getDoc(doc(db, "users", uid, "images", `${id}-clean`));
+// AI가 찾은 그림·도형 부분만 잘라낸 사진 (원본과 따로 저장: 문서 하나당 1MB 제한)
+export async function getFigure(uid, id) {
+  const s = await getDoc(doc(db, "users", uid, "images", `${id}-fig`));
   return s.exists() ? s.data().data : null;
 }
-export const saveCleanImage = (uid, id, data) => setDoc(doc(db, "users", uid, "images", `${id}-clean`), { data });
-export const deleteCleanImage = (uid, id) => deleteDoc(doc(db, "users", uid, "images", `${id}-clean`));
+export const saveFigure = (uid, id, data) => setDoc(doc(db, "users", uid, "images", `${id}-fig`), { data });
 
 // ---------- 맞춤형 문제(시험지)
 const examsCol = (uid) => collection(db, "users", uid, "exams");

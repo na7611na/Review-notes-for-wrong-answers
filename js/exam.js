@@ -17,17 +17,16 @@ async function cachedImage(key, fetcher) {
   if (!imgCache.has(key)) imgCache.set(key, await fetcher().catch(() => null));
   return imgCache.get(key);
 }
-export const forgetImage = (noteId) => { imgCache.delete(noteId); imgCache.delete(noteId + "-clean"); };
+export const forgetImage = (noteId) => { imgCache.delete(noteId); imgCache.delete(noteId + "-fig"); };
 
-// 문항 표시 방법: 지운 사진 > (그림 없으면) AI가 옮겨 쓴 글 > 원본 사진(채점 표시가 남아 있음)
+// 문항 표시 방법: AI가 다시 입력한 문서(+ 잘라낸 그림). AI 분석 전이면 원본 사진(채점 표시가 남아 있음)
 async function buildItems(exam) {
   const notes = exam.noteIds.map(noteById).filter(Boolean);
   return Promise.all(notes.map(async (n) => {
     const o = n.original || null;
-    let image = await cachedImage(n.id + "-clean", () => DB.getCleanImage(state.uid, n.id));
-    let marked = false;
-    if (!image && (!o || o.hasFigure)) { image = await cachedImage(n.id, () => DB.getImage(state.uid, n.id)); marked = true; }
-    return { n, o, image, marked };
+    if (!o) return { n, o, image: await cachedImage(n.id, () => DB.getImage(state.uid, n.id)), marked: true };
+    const figure = n.hasFigureImg ? await cachedImage(n.id + "-fig", () => DB.getFigure(state.uid, n.id)) : null;
+    return { n, o, figure, image: null, marked: false };
   }));
 }
 // 사진으로 내는 객관식은 보기 글 없이 번호만 고르게 한다
@@ -36,7 +35,7 @@ const gradeTarget = (it) => it.o || { type: "short", answer: "" };
 
 function questionHtml(it) {
   if (it.image) return `<img class="ei-img" src="${it.image}" alt="문제">`;
-  return `<p class="q-text">${esc(it.o.question)}</p>`;
+  return `<p class="q-text">${esc(it.o.question)}</p>${it.figure ? `<img class="ei-fig" src="${it.figure}" alt="그림">` : ""}`;
 }
 
 // ---------------------------------------------------------- 목록
@@ -49,6 +48,17 @@ export function renderExams() {
       <span><b>새 시험지 만들기</b><small>과목과 단원을 고르면 자동으로 만들어져요</small></span>
       <span class="arrow">›</span>
     </a>
+    <h2 class="sec-title">📄 저장된 문제 <small class="muted">AI가 채점 표시 없이 다시 입력한 문제</small></h2>
+    <section class="vault">
+      ${SUBJECT_KEYS.map((k) => {
+        const list = state.notes.filter((n) => n.subject === k && n.original);
+        const waiting = state.notes.filter((n) => n.subject === k && !n.original).length;
+        return `<a class="vault-card" href="#/exam-new?subject=${k}" style="${subjVars(k)}">
+          <span class="s-icon">${SUBJECTS[k].icon}</span><b>${SUBJECTS[k].name}</b>
+          <small>${list.length}문제 · ${new Set(list.map(chapterOf)).size}단원${waiting ? ` · 분석 전 ${waiting}` : ""}</small>
+        </a>`;
+      }).join("")}
+    </section>
     <h2 class="sec-title">내 시험지</h2>
     <section class="note-list">
       ${state.exams.length ? state.exams.map((e) => `
@@ -76,7 +86,6 @@ export function renderExamNew(opts = {}) {
   const picked = opts.picked || new Set(chapters);
   const chosen = chapters.filter((c) => picked.has(c)).flatMap((c) => groups[c]);
   const noAI = chosen.filter((n) => !n.original).length;
-  const figure = chosen.filter((n) => n.original?.hasFigure && !n.hasClean).length;
 
   layout(`
     <header class="page-head"><a href="#/exams" class="back">‹</a><h1>새 시험지 만들기</h1></header>
@@ -99,8 +108,7 @@ export function renderExamNew(opts = {}) {
     <section class="card step">
       <h3><span class="num">3</span>시험지 이름</h3>
       <input id="examTitle" value="${esc(opts.title ?? `${SUBJECTS[subject].name} 맞춤형 문제 (${fmtDate(Date.now())})`)}">
-      ${noAI ? `<p class="warn">ℹ️ AI 분석이 안 된 문제 ${noAI}개는 자동 채점이 안 돼서, 풀고 나서 직접 ○/✕를 체크해요.</p>` : ""}
-      ${figure ? `<p class="warn">🧽 그림이 있는 문제 ${figure}개는 사진으로 나와요. 오답노트에서 <b>채점 표시 지우기</b>를 하면 깨끗하게 나와요.</p>` : ""}
+      ${noAI ? `<p class="warn">ℹ️ AI가 아직 문서로 옮기지 못한 문제 ${noAI}개는 원본 사진(채점 표시 포함)으로 나오고, 직접 ○/✕를 체크해요. 오답노트에서 <b>🤖 AI로 분석하기</b>를 누르면 깨끗한 문서로 바뀌어요.</p>` : ""}
     </section>
     <button class="btn primary big full" id="make" ${chosen.length ? "" : "disabled"}>📝 ${chosen.length}문제로 시험지 만들기</button>
   `, "exams");
@@ -225,7 +233,7 @@ function examItemHtml(it, i, s) {
       ${r === true ? `<span class="mark ok">○</span>` : r === false ? `<span class="mark no">✕</span>` : ""}
     </div>
     ${questionHtml(it)}
-    ${it.marked ? `<p class="warn small">채점 표시가 보이면 <a href="#/note/${id}">오답노트</a>에서 🧽 지우개로 지워 주세요.</p>` : ""}
+    ${it.marked ? `<p class="warn small">AI 분석 전이라 원본 사진이에요. <a href="#/note/${id}">오답노트</a>에서 🤖 AI로 분석하면 깨끗한 문서로 바뀌어요.</p>` : ""}
     ${paper ? "" : answerInput(gradeTarget(it), a, { ...inputOpts(it), checked: s.submitted && t !== "essay" && !!it.o })}
     ${showAnswer ? `<div class="feedback ${r === true ? "ok" : r === false ? "no" : "neutral"}">
         ${it.o ? `<b>정답: ${esc(answerText(it.o))}</b>${it.o.explanation ? `<p>${esc(it.o.explanation)}</p>` : ""}` : `<p>AI 분석 전이라 정답 정보가 없어요. 교과서·선생님 답으로 확인해요.</p>`}
@@ -277,7 +285,7 @@ export async function renderPrint(id) {
       <button class="btn primary" id="doPrint">🖨️ 인쇄하기</button>
       <label class="check inline"><input type="checkbox" id="withAns" checked><span>정답·해설지 함께 인쇄</span></label>
     </div>
-    ${items.some((it) => it.marked) ? `<p class="warn no-print">채점 표시가 남아 있는 사진 문제가 있어요. 오답노트에서 🧽 지우개로 지우면 깨끗하게 인쇄돼요.</p>` : ""}
+    ${items.some((it) => it.marked) ? `<p class="warn no-print">AI 분석 전인 문제는 원본 사진(채점 표시 포함)으로 인쇄돼요. 오답노트에서 🤖 AI로 분석하면 깨끗한 문서로 바뀌어요.</p>` : ""}
     <div class="paper">
       <header class="p-head">
         <div><small>${SUBJECTS[exam.subject].name} · 맞춤형 문제</small><h1>${esc(exam.title)}</h1></div>
@@ -285,7 +293,7 @@ export async function renderPrint(id) {
       </header>
       <div class="p-items">
         ${items.map((it, i) => `<section class="p-item">
-          <div class="p-q"><b>${i + 1}.</b> ${it.image ? `<img src="${it.image}" alt="">` : `<span class="pre">${esc(it.o.question)}</span>`}</div>
+          <div class="p-q"><b>${i + 1}.</b> ${it.image ? `<img src="${it.image}" alt="">` : `<div><span class="pre">${esc(it.o.question)}</span>${it.figure ? `<img class="p-fig" src="${it.figure}" alt="">` : ""}</div>`}</div>
           ${answerSpace(it)}
         </section>`).join("")}
       </div>

@@ -73,8 +73,70 @@ const FORMAT_HELP = `type은 "choice"(객관식), "short"(단답형: 숫자·단
 - short: answer에 정답, accept에 같은 뜻의 다른 표기(예: "5", "x=5", "5개")를 넣어요.
 - essay: answer에 모범 답안을 넣어요.`;
 
+// ---------------------------------------------------------- 동일 유형 검사
+// 숫자는 #로 바꾸고 띄어쓰기를 지운 뒤 두 글자씩 비교 (숫자만 바꾼 문제는 거의 1.0)
+const shape = (t) => String(t || "").replace(/[0-9０-９]+(\.[0-9]+)?/g, "#").replace(/\s+/g, "");
+function similarity(a, b) {
+  const grams = (t) => { const m = new Map(); for (let i = 0; i < t.length - 1; i++) { const g = t.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); } return m; };
+  const A = grams(shape(a)), B = grams(shape(b));
+  let both = 0, total = 0;
+  A.forEach((v, k) => { both += Math.min(v, B.get(k) || 0); total += v; });
+  B.forEach((v) => (total += v));
+  return total ? (2 * both) / total : 0;
+}
+// 수학·과학은 숫자만 바꾸므로 기준을 높게, 국어·영어·사회는 예문·자료가 바뀌므로 낮게
+const MIN_SIM = { math: 0.55, science: 0.45, korean: 0.3, english: 0.3, social: 0.35 };
+
+function isSameType(p, o, subject) {
+  if (!o) return true;
+  if (p.type !== o.type) return false;
+  if (o.type === "choice" && p.choices.length !== o.choices.length) return false;
+  if (shape(p.question) === shape(o.question) && JSON.stringify(p.choices) === JSON.stringify(o.choices)) return false; // 그대로 베낌
+  return similarity(p.question, o.question) >= (MIN_SIM[subject] ?? 0.4);
+}
+
 /**
- * 틀린 문제 사진을 분석해 원래 문제(채점 표시 제거), 단원, 핵심 개념, 동일 유형 문제 3개를 만든다.
+ * 원래 문제의 숫자·보기만 바꾼 동일 유형 문제를 count개 만든다.
+ * 원래 문제와 너무 다르면 버리고 한 번 더 만든다.
+ */
+export async function sameTypeProblems({ original, subject, grade, unit, seen = [], count = 3, easierFirst = false }) {
+  const o = { type: original.type, question: original.question, choices: original.choices, answer: original.answer, accept: original.accept };
+  const out = [];
+  let feedback = "";
+  for (let attempt = 0; attempt < 2 && out.length < count; attempt++) {
+    const prompt = `당신은 ${grade} 학생의 ${SUBJECTS[subject].name} 선생님이에요.
+아래 "원래 문제"를 바탕으로 동일 유형 문제 ${count - out.length + 1}개를 만들어 주세요.
+
+원래 문제(JSON): ${JSON.stringify(o)}
+유형: ${unit || "(원래 문제와 같은 유형)"}
+${seen.length ? `이미 낸 문제(같은 숫자·보기를 쓰지 않아요): ${seen.slice(-9).join(" / ")}` : ""}
+${easierFirst ? "학생이 방금 틀렸으니 첫 문제는 숫자를 조금 더 쉽게 바꿔 주세요. (문장·형식은 그대로)" : ""}
+${feedback}
+${SAME_TYPE}
+- 원래 문제의 문장을 거의 그대로 두세요. 단순 계산 문제나 다른 유형의 문제로 바꾸면 안 돼요.
+- changed에는 원래 문제에서 무엇을 바꿨는지 짧게 써요 (예: "3→5, 10→12").
+
+${FORMAT_HELP}
+${STYLE}
+
+JSON 형식: {"problems":[{"type":"${o.type}","question":"","choices":[],"answer":0,"accept":[],"explanation":"","changed":""}]}`;
+    const data = await run([prompt]);
+    const fresh = cleanList(data.problems).filter((p) => !out.some((x) => x.question === p.question) && !seen.includes(p.question));
+    const good = fresh.filter((p) => isSameType(p, original, subject));
+    out.push(...good);
+    if (good.length < fresh.length) {
+      console.warn("원래 문제와 너무 다른 문제를 버렸어요", fresh.filter((p) => !good.includes(p)).map((p) => p.question));
+      feedback = "[주의] 앞에서 만든 문제가 원래 문제와 문장이 너무 달라서 버렸어요. 원래 문제 문장을 복사한 뒤 숫자와 보기만 바꾸세요.";
+    }
+  }
+  if (!out.length) throw new Error("NOT_SAME_TYPE");
+  return out.slice(0, count);
+}
+
+/**
+ * 틀린 문제 사진을 분석한다.
+ * 1단계: 채점 표시를 뺀 문제를 문서(글)로 다시 쓰고, 그림이 있으면 그 위치를 찾는다.
+ * 2단계: 그 문서를 바탕으로 동일 유형 문제 3개를 만든다.
  */
 export async function analyzeProblem({ imageBase64, subject, grade, reasons, memo, bankUnits, chapter }) {
   const prompt = `당신은 ${grade} 학생의 ${SUBJECTS[subject].name} 과목 오답노트를 도와주는 선생님이에요.
@@ -83,19 +145,19 @@ export async function analyzeProblem({ imageBase64, subject, grade, reasons, mem
 ${chapter ? `학생이 고른 단원: ${chapter} (chapter에는 이 이름을 그대로 써요)\n` : ""}
 다음을 JSON으로 만들어 주세요.
 1. readable: 사진에서 문제를 읽을 수 있으면 true, 아니면 false
-2. original: 사진 속 원래 문제를 "새 시험지"에 다시 실을 수 있게 깨끗하게 옮겨 적은 것
-   - 채점 표시(○, ✕, 빗금, 동그라미, 점수), 학생이 적은 답·풀이·낙서는 모두 빼고 인쇄된 문제만 옮겨요.
-   - 문제 번호(예: "3.")는 빼요. 지문·자료·조건은 빠짐없이 옮겨요.
-   - hasFigure: 그림·도형·그래프·표·지도처럼 글로 옮길 수 없는 자료가 있으면 true
-   - answer와 explanation은 이 문제의 정답과 풀이예요.
+2. original: 사진 속 문제를 "새 시험지"에 실을 수 있게 처음부터 다시 입력한 문서
+   - 채점 표시(○, ✕, 빗금, 체크, 동그라미, 점수)와 학생이 쓴 답·풀이·밑줄·낙서는 모두 빼고, 인쇄된 문제만 옮겨요.
+   - 문제 번호(예: "3.")는 빼요. 지문·<보기>·조건·단위는 한 글자도 빠짐없이 그대로 옮겨요.
+   - 표는 글로 옮겨요 (예: "| 시간(분) | 0 | 1 | 2 |" 처럼 한 줄씩).
+   - hasFigure: 글로 옮길 수 없는 그림·도형·그래프·지도가 있으면 true
+   - figureBox: hasFigure가 true일 때 그 그림만 감싸는 영역 [ymin, xmin, ymax, xmax] (사진 전체를 0~1000으로 본 값). 없으면 null
+   - answer와 explanation은 이 문제의 정답과 풀이예요. 학생이 쓴 답이 아니라 올바른 정답이에요.
 3. unit: 이 문제의 세부 유형 이름 (짧게, 예: "일차방정식의 활용 - 거리·속력·시간")
-4. chapter: 교과서 단원 이름 (예: "일차방정식", "현재완료", "광합성"). 같은 단원의 문제끼리 묶을 때 써요.
+4. chapter: 교과서 단원 이름 (예: "일차방정식", "현재완료", "광합성")
 5. concept: 이 유형을 풀기 위한 핵심 개념
    - title: 개념 이름 / summary: 한두 문장 설명 / points: 꼭 알아야 할 원리·공식 2~4개
    - tip: 학생이 고른 틀린 이유를 고려한 실수 방지 팁 한 문장
-6. problems: 원래 문제와 동일한 유형의 문제 3개
-${SAME_TYPE}
-7. bankUnitId: 아래 목록 중 이 문제와 가장 가까운 단원의 id, 없으면 null
+6. bankUnitId: 아래 목록 중 이 문제와 가장 가까운 단원의 id, 없으면 null
 ${bankUnits.map((u) => `   - ${u.id}: ${u.title}`).join("\n")}
 
 ${FORMAT_HELP}
@@ -103,51 +165,37 @@ ${STYLE}
 
 JSON 형식:
 {"readable":true,
- "original":{"type":"choice","question":"","choices":["","","","",""],"answer":0,"accept":[],"explanation":"","hasFigure":false},
+ "original":{"type":"choice","question":"","choices":["","","","",""],"answer":0,"accept":[],"explanation":"","hasFigure":false,"figureBox":null},
  "unit":"","chapter":"",
  "concept":{"title":"","summary":"","points":[""],"tip":""},
- "problems":[{"type":"choice","question":"","choices":["","","","",""],"answer":0,"accept":[],"explanation":""}],
  "bankUnitId":null}`;
 
   const data = await run([prompt, { inlineData: { data: imageBase64, mimeType: "image/jpeg" } }]);
   const original = cleanProblem(data.original);
-  const problems = cleanList(data.problems);
-  if (!data.readable || !original || problems.length < 3 || !data.concept) throw new Error("UNREADABLE");
+  if (!data.readable || !original || !data.concept) throw new Error("UNREADABLE");
   original.hasFigure = !!data.original.hasFigure;
+  const box = data.original.figureBox;
+  original.figureBox = original.hasFigure && Array.isArray(box) && box.length === 4 && box.every((v) => Number.isFinite(+v)) ? box.map(Number) : null;
+  const unit = String(data.unit || "");
+  const problems = await sameTypeProblems({ original, subject, grade, unit });
   return {
     original,
     // 예전 화면 호환용 글자 정보
     problemText: original.question + (original.choices ? "\n" + original.choices.map((c, i) => `${"①②③④⑤"[i]} ${c}`).join("\n") : ""),
     correctAnswer: (original.type === "choice" ? `${"①②③④⑤"[original.answer]} ${original.choices[original.answer]}` : original.answer) + (original.explanation ? `\n${original.explanation}` : ""),
-    unit: String(data.unit || ""),
+    unit,
     chapter: String(data.chapter || data.unit || ""),
     concept: {
       title: String(data.concept.title || ""), summary: String(data.concept.summary || ""),
       points: (data.concept.points || []).map(String), tip: String(data.concept.tip || ""),
     },
-    problems: problems.slice(0, 3),
+    problems,
     bankUnitId: bankUnits.some((u) => u.id === data.bankUnitId) ? data.bankUnitId : null,
   };
 }
 
 /** 틀렸을 때 추가로 풀 동일 유형 문제 3개 */
-export async function moreProblems({ note, grade, seen, wrongCount }) {
-  const o = note.original;
-  const originalText = o ? JSON.stringify({ type: o.type, question: o.question, choices: o.choices, answer: o.answer }) : note.problemText;
-  const prompt = `당신은 ${grade} 학생의 ${SUBJECTS[note.subject].name} 선생님이에요.
-학생이 아래 문제와 동일한 유형을 연습하다가 ${wrongCount}문제를 틀렸어요. 동일 유형 문제 3개를 새로 만들어 주세요.
-- 원래 문제: ${originalText}
-- 유형: ${note.unit}
-- 핵심 개념: ${note.concept?.title} - ${note.concept?.summary}
-- 이미 낸 문제(같은 숫자·보기는 쓰지 않아요): ${seen.slice(-9).join(" / ")}
-${SAME_TYPE}
-
-${FORMAT_HELP}
-${STYLE}
-
-JSON 형식: {"problems":[{"type":"","question":"","choices":[],"answer":0,"accept":[],"explanation":""}]}`;
-  const data = await run([prompt]);
-  const problems = cleanList(data.problems);
-  if (problems.length < 1) throw new Error("NO_PROBLEMS");
-  return problems.slice(0, 3);
+export function moreProblems({ note, grade, seen, wrongCount }) {
+  if (!note.original) throw new Error("NO_ORIGINAL");
+  return sameTypeProblems({ original: note.original, subject: note.subject, grade, unit: note.unit, seen, easierFirst: wrongCount > 0 });
 }
