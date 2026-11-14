@@ -5,7 +5,8 @@ import { initAI, analyzeProblem, moreProblems } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
 import { typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
 import { openEraser } from "./eraser.js";
-import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage } from "./exam.js";
+import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
+import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
 
 // 사진을 JPEG로 줄이기 (Firestore 문서 1MB 제한 + 무료 용량 절약)
 function loadImage(file) {
@@ -37,16 +38,19 @@ const aiFields = (r) => ({
   unit: r.unit, chapter: r.chapter, aiChapter: r.chapter, concept: r.concept, firstSet: r.problems,
 });
 
-// ---------------------------------------------------------- 단원 선택지
-// 내가 직접 추가했거나 이미 쓴 단원이 먼저, 그다음 학년에 맞는 기본 단원
-function chapterOptions(subject, extra = []) {
-  const band = bandOf(state.profile?.grade);
-  const mine = state.profile?.chapters?.[subject] || [];
-  const used = state.notes.filter((n) => n.subject === subject && n.chapter).map((n) => n.chapter);
-  const basic = unitsFor(subject, state.custom).filter((u) => u.band === band).map((u) => u.title);
-  return [...new Set([...extra, ...mine, ...used, ...basic].map((c) => c.trim()).filter(Boolean))];
+// AI가 실패한 까닭을 알기 쉽게
+function aiErrorMessage(e) {
+  const m = String(e?.message || e);
+  if (m.includes("UNREADABLE")) return "사진에서 문제를 읽지 못했어요. 밝은 곳에서 한 문제만 다시 찍어 보세요.";
+  if (/429|quota|RESOURCE_EXHAUSTED/i.test(m)) return "오늘 AI 무료 사용량을 다 썼어요.";
+  if (/403|permission|API has not been used|disabled|PERMISSION_DENIED|api-not-enabled/i.test(m)) return "Firebase AI Logic(5단계) 설정을 확인해 주세요.";
+  if (/network|fetch|Failed to fetch/i.test(m)) return "인터넷 연결을 확인해 주세요.";
+  if (/404|not found/i.test(m)) return "AI 모델 이름을 찾지 못했어요(설정 파일의 AI_MODELS 확인).";
+  return "AI가 지금은 문제를 분석하지 못했어요 (" + m.slice(0, 80) + ").";
 }
-// 새로 입력한 단원은 프로필에 저장해 다음부터 선택지에 나온다
+
+// ---------------------------------------------------------- 단원 고르기 (2022 개정 교육과정)
+// 기타에서 직접 입력한 단원은 프로필에 저장해 다음부터 선택지에 나온다
 async function rememberChapter(subject, chapter) {
   if (!chapter) return;
   const all = { ...(state.profile.chapters || {}) };
@@ -56,21 +60,47 @@ async function rememberChapter(subject, chapter) {
   state.profile.chapters = all;
   await DB.saveProfile(state.uid, { chapters: all }).catch((e) => console.warn("단원 저장 실패", e));
 }
-// 단원 칩 + 직접 입력 영역
-function chapterPicker(subject, selected, extra = []) {
-  const opts = chapterOptions(subject, selected ? [selected, ...extra] : extra);
-  return `<div class="chip-row chapter-row">
-      <button class="ch-chip ${!selected ? "on" : ""}" data-chapter="">🤖 AI가 정하기</button>
-      ${opts.map((c) => `<button class="ch-chip ${c === selected ? "on" : ""}" data-chapter="${esc(c)}">${esc(c)}</button>`).join("")}
-    </div>
-    <div class="ch-add"><input placeholder="✏️ 단원 이름 직접 입력 (예: 소인수분해)" maxlength="30" data-newch><button class="btn small" data-addch>추가</button></div>`;
-}
-function bindChapterPicker(root, onPick) {
-  root.querySelectorAll("[data-chapter]").forEach((b) => b.onclick = () => onPick(b.dataset.chapter));
-  const inp = root.querySelector("[data-newch]");
-  const add = () => { const v = inp.value.trim(); if (v) onPick(v); };
-  root.querySelector("[data-addch]").onclick = add;
-  inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } };
+const isCurriculum = (subject, sel) => !!sel.term && (CURRICULUM[subject][sel.term] || []).includes(sel.chapter);
+
+/**
+ * 학년·학기 → 단원 고르기. 목록에 없으면 "기타"에서 직접 입력.
+ * sel = { term, chapter } 를 직접 바꾸고, 바뀔 때마다 onChange 호출
+ */
+function mountChapterPicker(box, subject, sel, onChange = () => {}) {
+  const ui = { term: sel.term || termOfChapter(subject, sel.chapter) || currentTerm(subject, state.profile?.grade), etc: false };
+  const draw = () => {
+    const list = CURRICULUM[subject][ui.term] || [];
+    const mine = state.profile?.chapters?.[subject] || [];
+    const custom = !!sel.chapter && !isCurriculum(subject, sel);
+    const openEtc = ui.etc || custom;
+    box.innerHTML = `
+      <label class="term-pick">학년·학기
+        <select data-term>${termsOf(subject).map((t) => `<option ${t === ui.term ? "selected" : ""}>${t}</option>`).join("")}</select>
+      </label>
+      <div class="chip-row chapter-row">
+        ${list.map((c) => `<button class="ch-chip ${sel.term === ui.term && sel.chapter === c ? "on" : ""}" data-chapter="${esc(c)}">${esc(c)}</button>`).join("")}
+        <button class="ch-chip etc ${openEtc ? "on" : ""}" data-chetc>✏️ 기타 (직접 입력)</button>
+      </div>
+      ${openEtc ? `<div class="etc-box">
+        ${mine.length ? `<p class="muted small">내가 입력한 단원</p><div class="chip-row">${mine.map((c) => `<button class="ch-chip ${custom && sel.chapter === c ? "on" : ""}" data-mine="${esc(c)}">${esc(c)}</button>`).join("")}</div>` : ""}
+        <div class="ch-add"><input placeholder="단원 이름 입력 (예: 소인수분해)" maxlength="30" data-newch><button class="btn small" data-addch>추가</button></div>
+      </div>` : ""}
+      ${sel.chapter ? `<p class="picked">✔ <b>${esc(sel.term ? `${sel.term} · ${sel.chapter}` : sel.chapter)}</b> <button class="link" data-clear>선택 취소</button></p>`
+        : `<p class="muted small">고르지 않으면 AI가 단원을 정해요.</p>`}`;
+    const set = (term, chapter) => { sel.term = term; sel.chapter = chapter; onChange(sel); draw(); };
+    box.querySelector("[data-term]").onchange = (e) => { ui.term = e.target.value; draw(); };
+    box.querySelectorAll("[data-chapter]").forEach((b) => b.onclick = () => set(ui.term, b.dataset.chapter));
+    box.querySelectorAll("[data-mine]").forEach((b) => b.onclick = () => set(null, b.dataset.mine));
+    box.querySelector("[data-chetc]").onclick = () => { ui.etc = !openEtc; if (!ui.etc && custom) set(null, ""); else draw(); };
+    box.querySelector("[data-clear]")?.addEventListener("click", () => set(null, ""));
+    const inp = box.querySelector("[data-newch]");
+    if (inp) {
+      const add = () => { const v = inp.value.trim(); if (v) set(null, v); };
+      box.querySelector("[data-addch]").onclick = add;
+      inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } };
+    }
+  };
+  draw();
 }
 
 // ---------------------------------------------------------- 라우터
@@ -231,7 +261,7 @@ function renderSubject(key, filter = "learning") {
 
 // ---------------------------------------------------------- 새 오답 기록
 function renderNew(subject) {
-  const d = state.draft && (!subject || state.draft.subject === subject) ? state.draft : { subject: subject || null, image: null, thumb: null, reasons: [], etc: "", memo: "", chapter: "" };
+  const d = state.draft && (!subject || state.draft.subject === subject) ? state.draft : { subject: subject || null, image: null, thumb: null, reasons: [], etc: "", memo: "", chapter: "", term: null };
   state.draft = d;
   const reasons = d.subject ? REASONS[d.subject] : [];
   layout(`
@@ -245,8 +275,8 @@ function renderNew(subject) {
     </section>
 
     <section class="card step ${d.subject ? "" : "disabled"}" id="chapterStep">
-      <h3><span class="num">2</span>단원을 골라요 <small class="muted">(없으면 직접 입력)</small></h3>
-      ${d.subject ? chapterPicker(d.subject, d.chapter) : `<p class="muted">과목을 먼저 골라 주세요.</p>`}
+      <h3><span class="num">2</span>단원을 골라요 <small class="muted">(2022 개정 교육과정)</small></h3>
+      ${d.subject ? `<div id="chapterBox"></div>` : `<p class="muted">과목을 먼저 골라 주세요.</p>`}
     </section>
 
     <section class="card step">
@@ -271,14 +301,14 @@ function renderNew(subject) {
       <textarea rows="3" placeholder="내가 쓴 답, 헷갈렸던 부분 등을 적어요" data-memo>${esc(d.memo)}</textarea>
     </section>
 
-    <button class="btn primary big full" id="saveNote">저장하고 핵심 개념 보기 ✨</button>
+    <button class="btn primary big full" id="saveNote">🔥 틀린 문제 정복하기</button>
   `);
 
   $app.querySelectorAll("[data-subj]").forEach((b) => b.onclick = () => {
-    if (d.subject !== b.dataset.subj) { d.subject = b.dataset.subj; d.reasons = []; d.chapter = ""; }
+    if (d.subject !== b.dataset.subj) { d.subject = b.dataset.subj; d.reasons = []; d.chapter = ""; d.term = null; }
     renderNew();
   });
-  if (d.subject) bindChapterPicker($app.querySelector("#chapterStep"), (c) => { d.chapter = c; renderNewKeepScroll(); });
+  if (d.subject) mountChapterPicker($app.querySelector("#chapterBox"), d.subject, d);
   $app.querySelectorAll("[data-photo]").forEach((inp) => inp.onchange = async () => {
     const file = inp.files[0]; if (!file) return;
     loading(true, "사진을 정리하는 중…");
@@ -293,8 +323,6 @@ function renderNew(subject) {
   $app.querySelector("#saveNote").onclick = saveDraft;
 }
 
-function renderNewKeepScroll() { const y = window.scrollY; renderNew(); window.scrollTo(0, y); }
-
 async function saveDraft() {
   const d = state.draft;
   if (!d.subject) return toast("과목을 골라 주세요.");
@@ -308,34 +336,33 @@ async function saveDraft() {
   const bankUnits = unitsFor(d.subject, state.custom);
 
   loading(true, "AI 선생님이 문제를 살펴보고 있어요… 🔍");
-  let note = null;
+  let note = null, aiError = "";
   try {
     const r = await analyzeProblem({ imageBase64: d.image.split(",")[1], subject: d.subject, grade, reasons, memo: d.memo, bankUnits, chapter: d.chapter });
     note = { ...base, ...aiFields(r), bankUnitId: r.bankUnitId };
   } catch (e) {
     console.warn("AI 분석 실패", e);
+    aiError = aiErrorMessage(e);
   }
   loading(false);
 
   if (!note) {
-    // AI를 못 쓰면 문제은행 단원을 직접 고르게 한다
-    const unit = await pickBankUnit(d.subject, "AI가 지금은 문제를 분석하지 못했어요 😢<br>(무료 사용량 초과, 인터넷 연결, 흐린 사진 등)<br><b>비슷한 단원을 고르면 문제은행으로 연습할 수 있어요.</b>", true);
-    if (unit === undefined) return; // 취소
-    note = unit
-      ? { ...base, source: "bank", unit: unit.title, chapter: unit.title, concept: unit.concept, bankUnitId: unit.id }
-      : { ...base, source: "none", unit: d.chapter || "", concept: null, bankUnitId: null };
+    // AI를 못 쓰면 고른 단원으로 기록만 하고, 연습은 비슷한 문제은행 단원으로 한다
+    const bank = d.chapter && bankUnits.find((u) => u.title.includes(d.chapter) || d.chapter.includes(u.title.split(" ")[0]));
+    note = { ...base, source: "none", unit: d.chapter || "", concept: bank?.concept || null, bankUnitId: bank?.id || null };
   }
   // 직접 고른 단원이 있으면 그 단원으로 분류
-  if (d.chapter) note.chapter = d.chapter;
+  if (d.chapter) { note.chapter = d.chapter; note.term = d.term || null; }
 
   loading(true, "오답노트에 저장하는 중…");
   try {
-    await rememberChapter(d.subject, d.chapter);
+    if (d.chapter && !d.term) await rememberChapter(d.subject, d.chapter);
     const id = await DB.createNote(state.uid, note, d.image);
     state.notes.unshift({ id, ...note });
     state.draft = null;
     loading(false);
-    toast("오답노트에 기록했어요 📒");
+    if (aiError) toast(`📒 기록했어요. ${aiError} 나중에 "AI로 다시 분석"을 눌러 주세요.`, 6000);
+    else toast("오답노트에 기록했어요 📒");
     go(`#/note/${id}`);
   } catch (e) {
     loading(false);
@@ -377,7 +404,7 @@ async function renderNote(id, showClean = true) {
     <header class="subject-head" style="${subjVars(n.subject)}">
       <a href="#/subject/${n.subject}" class="back">‹</a>
       <span class="s-icon">${s.icon}</span>
-      <div><small>${s.name} · ${fmtDate(n.createdAt)}${n.chapter && n.chapter !== n.unit ? ` · ${esc(n.chapter)}` : ""}</small><h1>${esc(n.unit || "단원 미정")}</h1></div>
+      <div><small>${s.name} · ${fmtDate(n.createdAt)}${n.chapter && n.chapter !== n.unit ? ` · ${esc(chapterOf(n))}` : ""}</small><h1>${esc(n.unit || "단원 미정")}</h1></div>
     </header>
     <div class="status-row">${statusBadge(n)}${n.rounds ? `<span class="muted">연습 ${n.rounds}회 · 정답률 ${Math.round((n.totalCorrect / Math.max(1, n.totalSolved)) * 100)}%</span>` : ""}</div>
 
@@ -437,16 +464,18 @@ async function renderNote(id, showClean = true) {
     loading(false); renderNote(id, true);
   };
   $app.querySelector("#chChapter").onclick = () => {
-    modal(`<h3>📂 단원 바꾸기</h3><p class="muted center small">맞춤형 문제는 이 단원으로 묶여요.</p><div id="chBox">${chapterPicker(n.subject, n.chapter)}</div>
-      <button class="btn ghost full" data-close>닫기</button>`, (el) => {
-      bindChapterPicker(el, async (c) => {
+    const sel = { term: n.term || null, chapter: n.chapter || "" };
+    modal(`<h3>📂 단원 바꾸기</h3><p class="muted center small">맞춤형 문제는 이 단원으로 묶여요.</p><div id="chBox"></div>
+      <div class="btn-row"><button class="btn primary" data-save>저장</button><button class="btn ghost" data-close>취소</button></div>`, (el) => {
+      mountChapterPicker(el.querySelector("#chBox"), n.subject, sel);
+      el.querySelector("[data-save]").onclick = async () => {
         el.remove();
-        const chapter = c || n.aiChapter || n.unit || "";
-        await rememberChapter(n.subject, c);
-        await DB.updateNote(state.uid, id, { chapter }); n.chapter = chapter;
+        // 선택을 취소하면 AI가 정한 단원으로 되돌린다
+        const patch = sel.chapter ? { chapter: sel.chapter, term: sel.term || null } : { chapter: n.aiChapter || n.unit || "", term: null };
+        if (sel.chapter && !sel.term) await rememberChapter(n.subject, sel.chapter);
+        await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
         toast("단원을 바꿨어요."); renderNote(id);
-      });
-      el.querySelector("[data-chapter='']").textContent = "🤖 AI가 정한 단원";
+      };
     });
   };
   $app.querySelector("#practice").onclick = () => {
@@ -466,9 +495,9 @@ async function renderNote(id, showClean = true) {
     if (!img) return toast("사진을 불러오지 못했어요.");
     loading(true, "AI 선생님이 문제를 살펴보고 있어요… 🔍");
     try {
-      const r = await analyzeProblem({ imageBase64: img.split(",")[1], subject: n.subject, grade: state.profile?.grade, reasons: n.reasons, memo: n.memo, bankUnits: unitsFor(n.subject, state.custom) });
+      const r = await analyzeProblem({ imageBase64: img.split(",")[1], subject: n.subject, grade: state.profile?.grade, reasons: n.reasons, memo: n.memo, bankUnits: unitsFor(n.subject, state.custom), chapter: n.chapter });
       const patch = { ...aiFields(r), bankUnitId: n.bankUnitId || r.bankUnitId };
-      if (n.chapter && n.chapter !== n.aiChapter && n.chapter !== n.unit) patch.chapter = n.chapter;
+      if (n.term || (n.chapter && n.chapter !== n.aiChapter && n.chapter !== n.unit)) patch.chapter = n.chapter;
       await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
       toast("분석을 마쳤어요 ✨");
     } catch (e) { console.warn(e); toast("AI가 아직 분석하지 못했어요. 잠시 후 다시 해 주세요."); }

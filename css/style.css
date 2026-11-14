@@ -379,3 +379,12 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .ch-add .btn { flex-shrink: 0; }
 .modal .chapter-row { max-height: 45vh; overflow: auto; margin: 12px 0; }
 .modal .ch-add { margin-bottom: 12px; }
+
+/* 학년·학기 → 단원 */
+.term-pick { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: .92rem; margin-bottom: 12px; }
+.term-pick select { width: auto; min-width: 120px; padding: 9px 12px; font-weight: 700; }
+.ch-chip.etc { border-style: dashed; }
+.etc-box { background: #FAF8F4; border-radius: 14px; padding: 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 8px; }
+.etc-box p { margin: 0; }
+.picked { margin: 4px 0 0; font-size: .92rem; color: #D65A3A; }
+.link { border: 0; background: none; color: var(--muted); text-decoration: underline; font: inherit; font-size: .85rem; cursor: pointer; }
