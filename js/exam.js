@@ -274,7 +274,9 @@ function pAnswerArea(q) {
   return t === "choice" ? pChoices(q) : t === "essay" ? pEssay() : pShort();
 }
 
-const printOpts = { big: false, work: null, ans: true };
+// what: 인쇄할 것 — both(문제지+정답지) / questions(문제지만) / answers(정답·해설지만)
+const printOpts = { big: false, work: null, what: "both" };
+const PRINT_WHAT = [["both", "문제지 + 정답지"], ["questions", "문제지만"], ["answers", "정답·해설지만"]];
 
 export async function renderPrint(id) {
   const exam = state.exams.find((e) => e.id === id);
@@ -307,29 +309,34 @@ export async function renderPrint(id) {
   };
 
   const draw = () => {
+    const onlyAns = printOpts.what === "answers";
     $app.innerHTML = `
       <div class="print-bar no-print">
         <a class="btn" href="#/exam/${id}">‹ 돌아가기</a>
         <button class="btn primary" id="doPrint">🖨️ 인쇄하기</button>
+        <div class="seg">${PRINT_WHAT.map(([v, t]) => `<button class="${printOpts.what === v ? "on" : ""}" data-what="${v}">${t}</button>`).join("")}</div>
         <label class="check inline"><input type="checkbox" data-opt="big" ${printOpts.big ? "checked" : ""}><span>글자 크게</span></label>
-        <label class="check inline"><input type="checkbox" data-opt="work" ${printOpts.work ? "checked" : ""}><span>풀이 공간</span></label>
-        <label class="check inline"><input type="checkbox" data-opt="ans" ${printOpts.ans ? "checked" : ""}><span>정답·해설지</span></label>
+        ${onlyAns ? "" : `<label class="check inline"><input type="checkbox" data-opt="work" ${printOpts.work ? "checked" : ""}><span>풀이 공간</span></label>`}
       </div>
       ${items.some((it) => it.marked) ? `<p class="warn no-print">AI 분석 전인 문제는 원본 사진(채점 표시 포함)으로 인쇄돼요. 오답노트에서 🤖 AI로 분석하면 깨끗한 문서로 바뀌어요.</p>` : ""}
       <div class="paper ${printOpts.big ? "big" : ""}">
-        <header class="p-head">
+        ${onlyAns ? `<header class="p-head">
+          <div class="p-title"><small>${SUBJECTS[exam.subject].icon} ${SUBJECTS[exam.subject].name} · 맞춤형 문제 · ${items.length}문항</small><h1>정답과 해설</h1></div>
+          <div class="p-ans-title">${esc(exam.title)}</div>
+        </header>` : `<header class="p-head">
           <div class="p-title"><small>${SUBJECTS[exam.subject].icon} ${SUBJECTS[exam.subject].name} · 맞춤형 문제 · ${items.length}문항</small><h1>${esc(exam.title)}</h1></div>
           <table><tr><th>이름</th><td>${esc(p.name || "")}</td></tr><tr><th>날짜</th><td></td></tr><tr><th>점수</th><td class="p-score">/ ${items.length}</td></tr></table>
         </header>
         <p class="p-guide">✔ 문제를 끝까지 읽고, 묻는 것에 밑줄을 그어요. &nbsp; ✔ 풀고 나서 답을 한 번 더 확인해요.</p>
-        <div class="p-items">${items.map(itemHtml).join("")}</div>
-        <section class="p-answers ${printOpts.ans ? "" : "no-print"}">
-          <h2>정답과 해설 <small>${esc(exam.title)}</small></h2>
+        <div class="p-items">${items.map(itemHtml).join("")}</div>`}
+        ${printOpts.what === "questions" ? "" : `<section class="p-answers ${onlyAns ? "alone" : ""}">
+          ${onlyAns ? "" : `<h2>정답과 해설 <small>${esc(exam.title)}</small></h2>`}
           ${items.map(ansHtml).join("")}
-        </section>
+        </section>`}
       </div>`;
     window.scrollTo(0, 0);
     $app.querySelectorAll("[data-opt]").forEach((c) => c.onchange = () => { printOpts[c.dataset.opt] = c.checked; draw(); });
+    $app.querySelectorAll("[data-what]").forEach((b) => b.onclick = () => { printOpts.what = b.dataset.what; draw(); });
     $app.querySelector("#doPrint").onclick = () => window.print();
   };
   draw();
