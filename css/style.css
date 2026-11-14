@@ -431,3 +431,12 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .doc h3 .h3-tools .btn { margin-left: 0; }
 .bar { height: 10px; border-radius: 99px; background: #F0ECE5; overflow: hidden; margin: 6px 0 12px; }
 .bar span { display: block; height: 100%; width: 0; background: var(--primary); border-radius: 99px; transition: width .3s; }
+
+/* 틀린 이유: 짧은 칩으로 한 줄에 여러 개 */
+.reason-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.rchip { cursor: pointer; }
+.rchip input { position: absolute; opacity: 0; pointer-events: none; }
+.rchip span { display: flex; align-items: center; justify-content: center; text-align: center; min-height: 44px; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 12px; font-size: .9rem; font-weight: 600; line-height: 1.25; background: #fff; transition: all .15s; }
+.rchip input:checked + span { border-color: var(--primary); background: var(--primary-soft); color: #D65A3A; }
+.rchip input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (max-width: 420px) { .reason-chips { grid-template-columns: repeat(3, 1fr); } .rchip span { font-size: .84rem; padding: 8px 6px; } }
