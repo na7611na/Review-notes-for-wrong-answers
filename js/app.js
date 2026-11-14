@@ -5,6 +5,7 @@ import { initAI, analyzeProblem, moreProblems, cleanProblem } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
 import { typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
 import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
+import { openCropper } from "./cropper.js";
 import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
 
 // 사진을 JPEG로 줄이기 (Firestore 문서 1MB 제한 + 무료 용량 절약)
@@ -24,8 +25,8 @@ function toJpeg(img, maxDim, quality) {
   ctx.drawImage(img, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", quality);
 }
-async function compressPhoto(file) {
-  const img = await loadImage(file);
+// img: 사진 또는 자른 canvas
+function compressPhoto(img) {
   let dim = 1400, q = 0.75, data = toJpeg(img, dim, q);
   while (data.length > 650_000 && dim > 600) { dim -= 200; q -= 0.05; data = toJpeg(img, dim, q); }
   return { image: data, thumb: toJpeg(img, 260, 0.6) };
@@ -303,7 +304,9 @@ function renderNew(subject) {
 
     <section class="card step">
       <h3><span class="num">3</span>틀린 문제를 찍어요</h3>
-      ${d.image ? `<div class="photo-preview"><img src="${d.image}" alt="문제 사진"></div>` : `<div class="photo-empty">📄<p>문제가 잘 보이도록 밝은 곳에서<br>한 문제만 꽉 차게 찍어 주세요</p></div>`}
+      ${d.image ? `<div class="photo-preview"><img src="${d.image}" alt="문제 사진"></div>
+        ${d.src ? `<button class="btn full recrop" data-recrop>✂️ 다시 자르기</button>` : ""}`
+        : `<div class="photo-empty">📄<p>찍은 뒤에 틀린 문제 하나만 남도록<br>잘라 낼 수 있어요 ✂️</p></div>`}
       <div class="btn-row">
         <label class="btn primary">📷 카메라로 찍기<input type="file" accept="image/*" capture="environment" hidden data-photo></label>
         <label class="btn">🖼️ 앨범에서 고르기<input type="file" accept="image/*" hidden data-photo></label>
@@ -332,17 +335,28 @@ function renderNew(subject) {
   });
   if (d.subject) mountChapterPicker($app.querySelector("#chapterBox"), d.subject, d);
   $app.querySelectorAll("[data-photo]").forEach((inp) => inp.onchange = async () => {
-    const file = inp.files[0]; if (!file) return;
-    loading(true, "사진을 정리하는 중…");
-    try { Object.assign(d, await compressPhoto(file)); } catch { toast("사진을 불러오지 못했어요."); }
-    loading(false); renderNew();
+    const file = inp.files[0]; inp.value = ""; if (!file) return;
+    let img;
+    try { img = await loadImage(file); } catch { return toast("사진을 불러오지 못했어요."); }
+    await cropInto(d, img);
   });
+  $app.querySelector("[data-recrop]")?.addEventListener("click", () => cropInto(d, d.src));
   $app.querySelectorAll("[data-reason]").forEach((c) => c.onchange = () => {
     d.reasons = [...$app.querySelectorAll("[data-reason]:checked")].map((x) => x.value);
   });
   const etc = $app.querySelector("[data-etc]"); if (etc) etc.oninput = () => (d.etc = etc.value);
   $app.querySelector("[data-memo]").oninput = (e) => (d.memo = e.target.value);
   $app.querySelector("#saveNote").onclick = saveDraft;
+}
+
+// 자르기 창을 띄우고, 자른 사진을 기록에 넣는다 (취소하면 그대로)
+async function cropInto(d, img) {
+  const cropped = await openCropper(img);
+  if (!cropped) return;
+  d.src = img; // 다시 자르기는 원래 사진에서
+  loading(true, "사진을 정리하는 중…");
+  Object.assign(d, compressPhoto(cropped));
+  loading(false); renderNew();
 }
 
 async function saveDraft() {
