@@ -6,7 +6,7 @@
 import { SUBJECTS, SUBJECT_KEYS } from "./data.js";
 import * as DB from "./db.js";
 import { $app, state, esc, go, fmtDate, toast, loading, layout, subjChip, subjVars, noteById, confirmBox } from "./ui.js";
-import { NUM, TYPE_LABEL, typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
+import { NUM, TYPE_LABEL, typeOf, isMulti, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers, choiceLen } from "./answer.js";
 
 // 단원 이름 (학년·학기를 골랐으면 "중1-1 · 일차방정식")
 export const chapterOf = (n) => { const c = (n.chapter || n.unit || "단원 미정").trim(); return n.term && n.chapter ? `${n.term} · ${c}` : c; };
@@ -185,11 +185,7 @@ export async function renderExam(id) {
   `, "exams");
 
   $app.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => { s.mode = b.dataset.mode; s.submitted = false; s.results = {}; renderExam(id); });
-  $app.querySelectorAll("[data-choice]").forEach((b) => b.onclick = () => {
-    (s.answers[b.dataset.key] ||= {}).selected = +b.dataset.choice;
-    b.parentElement.querySelectorAll(".choice").forEach((x) => x.classList.toggle("sel", x === b));
-  });
-  $app.querySelectorAll("[data-text]").forEach((t) => t.oninput = () => { (s.answers[t.dataset.key] ||= {}).text = t.value; });
+  if (!s.submitted && !paper) bindAnswers($app, (key) => (s.answers[key] ||= {}), { getP: (key) => items.find((it) => it.n.id === key)?.o });
   $app.querySelectorAll("[data-self]").forEach((b) => b.onclick = () => { s.results[b.dataset.self] = b.dataset.v === "1"; renderExamKeepScroll(id); });
   $app.querySelector("#submit")?.addEventListener("click", async () => {
     const empty = items.filter((it) => !hasAnswer(it.o, s.answers[it.n.id] || {}, inputOpts(it))).length;
@@ -200,6 +196,7 @@ export async function renderExam(id) {
       else s.results[it.n.id] = it.o ? autoGrade(it.o, a) : null;
     });
     s.submitted = true;
+    window.scrollTo(0, 0);
     renderExam(id);
   });
   $app.querySelector("#finish")?.addEventListener("click", () => saveResults(exam, s));
@@ -234,7 +231,8 @@ function examItemHtml(it, i, s) {
     </div>
     ${questionHtml(it)}
     ${it.marked ? `<p class="warn small">AI 분석 전이라 원본 사진이에요. <a href="#/note/${id}">오답노트</a>에서 🤖 AI로 분석하면 깨끗한 문서로 바뀌어요.</p>` : ""}
-    ${paper ? "" : answerInput(gradeTarget(it), a, { ...inputOpts(it), checked: s.submitted && t !== "essay" && !!it.o })}
+    ${paper ? (isMulti(it.o) ? partsHtml(it.o) : "")
+      : answerInput(gradeTarget(it), a, { ...inputOpts(it), checked: s.submitted && t !== "essay" && !!it.o, partResults: s.submitted && isMulti(it.o) ? gradeParts(it.o, a) : null })}
     ${showAnswer ? `<div class="feedback ${r === true ? "ok" : r === false ? "no" : "neutral"}">
         ${it.o ? `<b>정답: ${esc(answerText(it.o))}</b>${it.o.explanation ? `<p>${esc(it.o.explanation)}</p>` : ""}` : `<p>AI 분석 전이라 정답 정보가 없어요. 교과서·선생님 답으로 확인해요.</p>`}
         ${!s.review && (paper || r == null || t === "essay" || !it.o) && (paper || s.submitted) ? selfCheck : ""}
@@ -264,6 +262,21 @@ async function saveResults(exam, s) {
 }
 
 // ---------------------------------------------------------- 인쇄
+// 보기 글이 길수록 한 줄에 적게 (짧으면 5개, 길면 한 줄에 1개)
+function choiceCols(choices) {
+  const m = Math.max(...choices.map(choiceLen));
+  return m <= 5 ? 5 : m <= 10 ? 3 : m <= 18 ? 2 : 1;
+}
+const pChoices = (q) => `<ol class="p-choices cols-${choiceCols(q.choices)}">${q.choices.map((c, i) => `<li><span class="p-cn">${NUM[i]}</span><span>${esc(c)}</span></li>`).join("")}</ol>`;
+const pShort = () => `<div class="p-short"><span>답</span><i></i></div>`;
+const pEssay = () => `<div class="p-essay"></div>`;
+function pAnswerArea(q) {
+  const t = typeOf(q);
+  return t === "choice" ? pChoices(q) : t === "essay" ? pEssay() : pShort();
+}
+
+const printOpts = { big: false, work: null, ans: true };
+
 export async function renderPrint(id) {
   const exam = state.exams.find((e) => e.id === id);
   if (!exam) return go("#/exams");
@@ -272,38 +285,53 @@ export async function renderPrint(id) {
   loading(false);
   document.body.classList.add("print-mode");
   const p = state.profile || {};
-  const answerSpace = (it) => {
-    const t = it.o ? typeOf(it.o) : "short";
-    if (t === "choice" && !it.image) return `<ol class="p-choices">${it.o.choices.map((c, i) => `<li><span>${NUM[i]}</span> ${esc(c)}</li>`).join("")}</ol>`;
-    if (t === "choice") return "";
-    if (t === "essay") return `<div class="p-essay"></div>`;
-    return `<div class="p-short">답: <span></span></div>`;
+  if (printOpts.work == null) printOpts.work = ["math", "science"].includes(exam.subject);
+
+  const itemHtml = (it, i) => {
+    const o = it.o;
+    let body;
+    if (it.image) body = `<img class="p-photo" src="${it.image}" alt="">`;
+    else if (isMulti(o)) body = `<div class="p-stem">${esc(o.question)}</div>${it.figure ? `<img class="p-fig" src="${it.figure}" alt="">` : ""}
+      ${o.parts.map((q) => `<div class="p-part"><div class="p-stem"><b class="p-pl">${esc(q.label)}</b> ${esc(q.question)}</div>${pAnswerArea(q)}</div>`).join("")}`;
+    else body = `<div class="p-stem">${esc(o.question)}</div>${it.figure ? `<img class="p-fig" src="${it.figure}" alt="">` : ""}${pAnswerArea(o)}`;
+    if (it.image && typeOf(o) !== "choice") body += pShort();
+    return `<section class="p-item">
+      <div class="p-num">${i + 1}</div>
+      <div class="p-body">${body}${printOpts.work ? `<div class="p-work"><span>풀이</span></div>` : ""}</div>
+    </section>`;
   };
-  $app.innerHTML = `
-    <div class="print-bar no-print">
-      <a class="btn" href="#/exam/${id}">‹ 돌아가기</a>
-      <button class="btn primary" id="doPrint">🖨️ 인쇄하기</button>
-      <label class="check inline"><input type="checkbox" id="withAns" checked><span>정답·해설지 함께 인쇄</span></label>
-    </div>
-    ${items.some((it) => it.marked) ? `<p class="warn no-print">AI 분석 전인 문제는 원본 사진(채점 표시 포함)으로 인쇄돼요. 오답노트에서 🤖 AI로 분석하면 깨끗한 문서로 바뀌어요.</p>` : ""}
-    <div class="paper">
-      <header class="p-head">
-        <div><small>${SUBJECTS[exam.subject].name} · 맞춤형 문제</small><h1>${esc(exam.title)}</h1></div>
-        <table><tr><th>이름</th><td>${esc(p.name || "")}</td><th>날짜</th><td></td><th>점수</th><td>&nbsp;&nbsp;&nbsp;&nbsp;/ ${items.length}</td></tr></table>
-      </header>
-      <div class="p-items">
-        ${items.map((it, i) => `<section class="p-item">
-          <div class="p-q"><b>${i + 1}.</b> ${it.image ? `<img src="${it.image}" alt="">` : `<div><span class="pre">${esc(it.o.question)}</span>${it.figure ? `<img class="p-fig" src="${it.figure}" alt="">` : ""}</div>`}</div>
-          ${answerSpace(it)}
-        </section>`).join("")}
+  const ansHtml = (it, i) => {
+    const o = it.o;
+    if (!o) return `<div class="p-ans"><b class="p-an">${i + 1}</b><div><p>정답 정보 없음 (AI 분석 전)</p></div></div>`;
+    const ans = isMulti(o) ? o.parts.map((q) => `<span class="p-ap">${esc(q.label)} ${esc(answerText(q))}</span>`).join("") : `<span class="p-ap">${esc(answerText(o))}</span>`;
+    return `<div class="p-ans"><b class="p-an">${i + 1}</b><div><div class="p-aline">${ans}<small>${esc(chapterOf(it.n))}</small></div>${o.explanation ? `<p>${esc(o.explanation)}</p>` : ""}</div></div>`;
+  };
+
+  const draw = () => {
+    $app.innerHTML = `
+      <div class="print-bar no-print">
+        <a class="btn" href="#/exam/${id}">‹ 돌아가기</a>
+        <button class="btn primary" id="doPrint">🖨️ 인쇄하기</button>
+        <label class="check inline"><input type="checkbox" data-opt="big" ${printOpts.big ? "checked" : ""}><span>글자 크게</span></label>
+        <label class="check inline"><input type="checkbox" data-opt="work" ${printOpts.work ? "checked" : ""}><span>풀이 공간</span></label>
+        <label class="check inline"><input type="checkbox" data-opt="ans" ${printOpts.ans ? "checked" : ""}><span>정답·해설지</span></label>
       </div>
-      <section class="p-answers" id="ansSheet">
-        <h2>정답과 해설 · ${esc(exam.title)}</h2>
-        ${items.map((it, i) => `<div class="p-ans"><b>${i + 1}.</b> <span class="p-ch">[${esc(chapterOf(it.n))}]</span>
-          ${it.o ? `<b>${esc(answerText(it.o))}</b>${it.o.explanation ? `<p>${esc(it.o.explanation)}</p>` : ""}` : "<p>정답 정보 없음 (AI 분석 전)</p>"}</div>`).join("")}
-      </section>
-    </div>`;
-  window.scrollTo(0, 0);
-  $app.querySelector("#withAns").onchange = (e) => $app.querySelector("#ansSheet").classList.toggle("no-print", !e.target.checked);
-  $app.querySelector("#doPrint").onclick = () => window.print();
+      ${items.some((it) => it.marked) ? `<p class="warn no-print">AI 분석 전인 문제는 원본 사진(채점 표시 포함)으로 인쇄돼요. 오답노트에서 🤖 AI로 분석하면 깨끗한 문서로 바뀌어요.</p>` : ""}
+      <div class="paper ${printOpts.big ? "big" : ""}">
+        <header class="p-head">
+          <div class="p-title"><small>${SUBJECTS[exam.subject].icon} ${SUBJECTS[exam.subject].name} · 맞춤형 문제 · ${items.length}문항</small><h1>${esc(exam.title)}</h1></div>
+          <table><tr><th>이름</th><td>${esc(p.name || "")}</td></tr><tr><th>날짜</th><td></td></tr><tr><th>점수</th><td class="p-score">/ ${items.length}</td></tr></table>
+        </header>
+        <p class="p-guide">✔ 문제를 끝까지 읽고, 묻는 것에 밑줄을 그어요. &nbsp; ✔ 풀고 나서 답을 한 번 더 확인해요.</p>
+        <div class="p-items">${items.map(itemHtml).join("")}</div>
+        <section class="p-answers ${printOpts.ans ? "" : "no-print"}">
+          <h2>정답과 해설 <small>${esc(exam.title)}</small></h2>
+          ${items.map(ansHtml).join("")}
+        </section>
+      </div>`;
+    window.scrollTo(0, 0);
+    $app.querySelectorAll("[data-opt]").forEach((c) => c.onchange = () => { printOpts[c.dataset.opt] = c.checked; draw(); });
+    $app.querySelector("#doPrint").onclick = () => window.print();
+  };
+  draw();
 }
