@@ -448,7 +448,7 @@ async function renderNote(id) {
     <div class="status-row">${statusBadge(n)}${n.rounds ? `<span class="muted">연습 ${n.rounds}회 · 정답률 ${Math.round((n.totalCorrect / Math.max(1, n.totalSolved)) * 100)}%</span>` : ""}</div>
 
     ${n.original ? `<section class="card doc">
-      <h3>📄 다시 입력한 문제 <small class="muted">채점 표시 없이 · 맞춤형 문제에 저장됨</small><button class="btn small" id="editDoc">✏️ 고치기</button></h3>
+      <h3>📄 다시 입력한 문제 <small class="muted">채점 표시 없이 · 맞춤형 문제에 저장됨</small><span class="h3-tools"><button class="btn small" id="reAI2">🔄 다시 분석</button><button class="btn small" id="editDoc">✏️ 고치기</button></span></h3>
       ${docHtml(n.original, n.hasFigureImg)}
       <details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(answerText(n.original))}${n.original.explanation ? "\n" + esc(n.original.explanation) : ""}</p></details>
       <details class="fold" id="origFold"><summary>📸 원본 사진 보기</summary><div class="photo-preview" id="photo"><img src="${n.thumb}" alt="문제 사진" class="blur"></div></details>
@@ -519,7 +519,13 @@ async function renderNote(id) {
     await DB.updateNote(state.uid, id, patch); Object.assign(n, patch);
     toast("단원을 연결했어요."); renderNote(id);
   };
-  $app.querySelector("#reAI")?.addEventListener("click", async () => { await reanalyze(n); renderNote(id); });
+  // 분석이 끝났을 때 아직 이 문제 화면이면 새로 그린다
+  const redraw = () => { if (location.hash === `#/note/${id}`) renderNote(id); };
+  $app.querySelector("#reAI")?.addEventListener("click", async () => { await reanalyze(n); redraw(); });
+  $app.querySelector("#reAI2")?.addEventListener("click", async () => {
+    if (!(await confirmBox("이 문제를 다시 분석할까요?", "AI가 사진을 다시 읽어 문제·정답·동일 유형 문제를 새로 만들어요.<br>✏️ 고치기로 바꾼 내용은 새 분석으로 바뀌어요.", "다시 분석"))) return;
+    await reanalyze(n); redraw();
+  });
   $app.querySelector("#del").onclick = async () => {
     if (!(await confirmBox("이 오답 기록을 삭제할까요?", "삭제하면 되돌릴 수 없어요.", "삭제", true))) return;
     loading(true, "삭제하는 중…");
@@ -530,10 +536,10 @@ async function renderNote(id) {
 }
 
 // 저장된 사진을 AI로 다시 분석 (성공하면 true)
-async function reanalyze(n) {
+async function reanalyze(n, { quiet = false } = {}) {
   const img = await DB.getImage(state.uid, n.id);
-  if (!img) { toast("사진을 불러오지 못했어요."); return false; }
-  loading(true, "AI가 문제를 다시 입력하고 동일 유형 문제를 만드는 중… 🔍");
+  if (!img) { if (!quiet) toast("사진을 불러오지 못했어요."); return quiet ? { ok: false, error: "사진 없음" } : false; }
+  if (!quiet) loading(true, "AI가 문제를 다시 입력하고 동일 유형 문제를 만드는 중… 🔍");
   try {
     const r = await runAnalysis({ image: img, subject: n.subject, reasons: n.reasons || [], memo: n.memo, chapter: n.chapter });
     const patch = { ...r.fields, bankUnitId: n.bankUnitId || r.fields.bankUnitId };
@@ -541,13 +547,48 @@ async function reanalyze(n) {
     if (r.figure) await DB.saveFigure(state.uid, n.id, r.figure);
     await DB.updateNote(state.uid, n.id, patch); Object.assign(n, patch);
     forgetImage(n.id);
+    if (quiet) return { ok: true };
     loading(false); toast("분석을 마쳤어요 ✨ 맞춤형 문제에도 저장됐어요.");
     return true;
   } catch (e) {
-    console.warn(e); loading(false);
+    console.warn(e);
+    if (quiet) return { ok: false, error: aiErrorMessage(e), fatal: /genai config|사용량|설정|인터넷/.test(aiErrorMessage(e)) };
+    loading(false);
     toast(aiErrorMessage(e), 6000);
     return false;
   }
+}
+
+// 예전 방식(1/2, x²처럼 글자로 쓴 수식)으로 저장된 문제인지
+const OLD_MATH = /\d+\s*\/\s*\d+|[½⅓⅔¼¾²³√×÷]/;
+function isOldFormat(n) {
+  if (!n.original) return true;
+  const o = n.original, text = [o.question, ...(o.choices || []), o.answer].join(" ");
+  return !text.includes("$") && OLD_MATH.test(text);
+}
+
+// 여러 문제를 차례로 다시 분석 (진행 상황 표시, 중단 가능)
+async function reanalyzeMany(list) {
+  let stop = false, ok = 0;
+  const fails = [];
+  const m = modal(`<h3>🔄 다시 분석하는 중</h3>
+    <p class="center"><b id="raNow">0</b> / ${list.length}</p>
+    <div class="bar"><span id="raBar"></span></div>
+    <p class="muted center small" id="raMsg">한 문제에 20~30초쯤 걸려요. 화면을 끄지 말고 기다려 주세요.</p>
+    <button class="btn ghost full" id="raStop">그만하기</button>`, (el) => {
+    el.querySelector("#raStop").onclick = () => { stop = true; el.querySelector("#raMsg").textContent = "지금 문제까지만 하고 멈출게요…"; };
+  });
+  m.dataset.lock = "1"; // 바깥을 눌러도 닫히지 않게
+  for (let i = 0; i < list.length && !stop; i++) {
+    const r = await reanalyze(list[i], { quiet: true });
+    if (r.ok) ok++; else fails.push(r.error);
+    m.querySelector("#raNow").textContent = i + 1;
+    m.querySelector("#raBar").style.width = `${((i + 1) / list.length) * 100}%`;
+    if (r.fatal) { stop = true; break; } // 설정·사용량 문제는 다음 문제도 똑같이 실패
+  }
+  m.remove();
+  const msg = `${ok}문제를 다시 분석했어요.` + (fails.length ? ` ${fails.length}문제는 실패했어요 (${fails[fails.length - 1]})` : "");
+  toast(msg, fails.length ? 7000 : 3500);
 }
 
 // AI가 잘못 읽은 글자를 직접 고친다
@@ -738,6 +779,7 @@ async function renderRoundResult(n, p) {
 // ---------------------------------------------------------- 설정
 function renderSettings() {
   const p = state.profile || {};
+  const oldList = state.notes.filter(isOldFormat);
   layout(`
     <header class="page-head"><h1>설정</h1></header>
     <section class="card">
@@ -756,6 +798,15 @@ function renderSettings() {
       <a class="btn" href="#/bank">문제은행 관리하기 ›</a>
     </section>
     <section class="card">
+      <h3>🔄 저장된 문제 다시 분석</h3>
+      <p class="muted">예전에 저장해서 분수가 1/2처럼 나오거나, 아직 AI가 분석하지 못한 문제를 다시 분석해요. 내 계정(${esc(p.name || "")})의 문제만 바뀌어요.</p>
+      <div class="btn-col">
+        <button class="btn primary" id="raOld" ${oldList.length ? "" : "disabled"}>예전 방식·분석 안 된 문제만 (${oldList.length}개)</button>
+        <button class="btn" id="raAll" ${state.notes.length ? "" : "disabled"}>전체 다시 분석 (${state.notes.length}개)</button>
+      </div>
+      <p class="muted small">한 문제에 AI 요청이 2번 쓰여요. 무료 사용량이 다 되면 자동으로 멈추고, 다음 날 이어서 하면 돼요. ✏️ 고치기로 바꾼 내용은 새 분석으로 바뀌어요.</p>
+    </section>
+    <section class="card">
       <button class="btn danger ghost full" id="logout">로그아웃</button>
     </section>
   `, "settings");
@@ -767,6 +818,13 @@ function renderSettings() {
     toast("저장했어요.");
   };
   $app.querySelector("#logout").onclick = () => DB.logout();
+  const runMany = async (list, label) => {
+    if (!(await confirmBox(`${label} ${list.length}문제를 다시 분석할까요?`, `약 ${Math.ceil((list.length * 25) / 60)}분 걸려요. 중간에 그만둘 수 있어요.`, "시작"))) return;
+    await reanalyzeMany(list);
+    renderSettings();
+  };
+  $app.querySelector("#raOld").onclick = () => runMany(oldList, "예전 방식·분석 안 된");
+  $app.querySelector("#raAll").onclick = () => runMany([...state.notes], "전체");
 }
 
 // ---------------------------------------------------------- 문제은행 관리

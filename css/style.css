@@ -425,3 +425,9 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .katex { font-size: 1.08em; }
 .choice .katex, .doc-choices .katex { font-size: 1.05em; }
 .q-text .katex-html, .doc-q .katex-html { line-height: 1.2; }
+
+/* 다시 분석 */
+.h3-tools { margin-left: auto; display: flex; gap: 6px; }
+.doc h3 .h3-tools .btn { margin-left: 0; }
+.bar { height: 10px; border-radius: 99px; background: #F0ECE5; overflow: hidden; margin: 6px 0 12px; }
+.bar span { display: block; height: 100%; width: 0; background: var(--primary); border-radius: 99px; transition: width .3s; }

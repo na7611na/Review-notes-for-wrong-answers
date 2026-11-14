@@ -40,7 +40,8 @@ export function modal(html, onMount, cls = "") {
   const el = document.createElement("div");
   el.className = "modal-back";
   el.innerHTML = `<div class="modal ${cls}">${html}</div>`;
-  el.addEventListener("click", (e) => { if (e.target === el || e.target.closest("[data-close]")) el.remove(); });
+  // data-lock 이 붙은 창은 바깥을 눌러도 닫히지 않는다 (진행 중인 작업)
+  el.addEventListener("click", (e) => { if ((e.target === el && !el.dataset.lock) || e.target.closest("[data-close]")) el.remove(); });
   document.body.appendChild(el);
   onMount?.(el);
   return el;
