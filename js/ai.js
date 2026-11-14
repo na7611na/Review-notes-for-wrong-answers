@@ -38,14 +38,15 @@ async function run(parts) {
   let lastErr;
   for (const name of AI_MODELS) {
     try {
-      const model = getGenerativeModel(ai, { model: name, generationConfig: { responseMimeType: "application/json", temperature: 0.4 } });
+      const model = getGenerativeModel(ai, { model: name, generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }, { timeout: 60_000 });
       const res = await model.generateContent(parts);
       const text = res.response.text().trim().replace(/^```(json)?/i, "").replace(/```$/, "");
       return JSON.parse(text);
     } catch (e) {
       lastErr = e;
-      // 모델이 없어졌으면(404) 다음 모델 시도, 그 밖의 오류(사용량 초과 등)는 바로 중단
-      if (!/404|not found|not supported/i.test(String(e?.message))) break;
+      console.warn(`AI 모델 ${name} 실패, 다음 모델 시도`, e);
+      // 프로젝트 설정 문제는 어느 모델이든 같으니 바로 중단, 그 밖에는(종료·사용량 초과·접속 몰림·시간 초과) 다음 모델
+      if (/genai config not found|api-not-enabled|PERMISSION_DENIED|API key/i.test(String(e?.message))) break;
     }
   }
   throw lastErr;
