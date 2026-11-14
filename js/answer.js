@@ -69,7 +69,7 @@ export function answerInput(p, a, o = {}) {
     ${p.parts.map((q, i) => {
       const r = o.partResults?.[i];
       return `<div class="part ${r === true ? "ok" : r === false ? "no" : ""}">
-        <div class="part-q"><b class="part-label">${esc(partLabel(q, i))}</b><span>${esc(q.question)}</span>${r === true ? `<span class="mark ok">○</span>` : r === false ? `<span class="mark no">✕</span>` : ""}</div>
+        <div class="part-q"><b class="part-label">${esc(partLabel(q, i))}</b><div>${richText(q.question)}</div>${r === true ? `<span class="mark ok">○</span>` : r === false ? `<span class="mark no">✕</span>` : ""}</div>
         ${singleInput(q, (a.parts || [])[i] || {}, { ...o, part: i })}
         ${o.checked ? `<p class="part-ans">정답: ${esc(answerText(q))}</p>` : ""}
       </div>`;
@@ -79,7 +79,7 @@ export function answerInput(p, a, o = {}) {
 
 // 읽기 전용: 소문항 목록 (문서 보기·종이 채점용)
 export function partsHtml(p) {
-  return `<ol class="parts-view">${p.parts.map((q, i) => `<li><b>${esc(partLabel(q, i))}</b> <span>${esc(q.question)}</span>
+  return `<ol class="parts-view">${p.parts.map((q, i) => `<li><b>${esc(partLabel(q, i))}</b> <div class="pv-q">${richText(q.question)}</div>
     ${typeOf(q) === "choice" ? `<div class="pv-choices ${isShortChoices(q.choices) ? "short" : ""}">${q.choices.map((c, j) => `<span>${NUM[j]} ${esc(c)}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
 }
 
@@ -129,6 +129,41 @@ export function bindAnswers(root, getA, { getP, onChange, onSubmit } = {}) {
       if (next) next.focus(); else onSubmit?.();
     };
   });
+}
+
+// ---------- 문제 글 꾸미기: <보기> 상자
+// "<보기>" 줄과 그 아래 "ㄱ. …", "(ㄴ) …" 같은 줄들을 교과서처럼 상자 안에 넣고,
+// 짧으면 한 줄에 2개씩 놓는다. 그 밖의 글은 줄바꿈을 그대로 둔다.
+const BOGI_HEAD = /^\s*[<〈《\[［(]\s*보\s*기\s*[>〉》\]］)]\s*$/;
+const BOGI_ITEM = /^\s*(\(\s*[ㄱ-ㅎ]\s*\)|[ㄱ-ㅎ]\s*[.)．]|\(\s*[a-eA-E가-마]\s*\)|[a-eA-E가-마]\s*[.)]|[①-⑩])\s*(.*)$/;
+function bogiBox(items, titled) {
+  const two = Math.max(...items.map((it) => choiceLen(it.text))) <= 14;
+  const label = (l) => l.replace(/[()\s.)．]/g, "") + (/^[①-⑩]$/.test(l.trim()) ? "" : ".");
+  return `<div class="bogi">${titled ? `<div class="bogi-title">보기</div>` : ""}<div class="bogi-items ${two ? "two" : ""}">${items
+    .map((it) => `<div class="bogi-item"><b>${esc(label(it.label))}</b><span>${esc(it.text)}</span></div>`).join("")}</div></div>`;
+}
+export function richText(text) {
+  const lines = String(text ?? "").split("\n");
+  const out = [];
+  let buf = [];
+  const flush = () => { if (buf.length) out.push(`<span class="rt-text">${esc(buf.join("\n").replace(/^\n+|\n+$/g, ""))}</span>`); buf = []; };
+  for (let i = 0; i < lines.length; i++) {
+    const titled = BOGI_HEAD.test(lines[i]);
+    let j = titled ? i + 1 : i;
+    while (j < lines.length && !lines[j].trim() && titled) j++; // 제목 아래 빈 줄 건너뛰기
+    const items = [];
+    for (; j < lines.length; j++) {
+      const m = lines[j].match(BOGI_ITEM);
+      if (!m) break;
+      items.push({ label: m[1], text: m[2] });
+    }
+    // 제목이 있으면 1개 이상, 제목 없이 ㄱ·ㄴ·ㄷ만 있으면 2줄 이상일 때 상자로
+    if ((titled && items.length) || (!titled && items.length >= 2 && /[ㄱ-ㅎ]/.test(items[0].label))) {
+      flush(); out.push(bogiBox(items, titled)); i = j - 1;
+    } else buf.push(lines[i]);
+  }
+  flush();
+  return out.join("");
 }
 
 // 화면에서 보기를 한 줄에 2개씩 놓아도 될 만큼 짧은지
