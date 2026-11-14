@@ -14,6 +14,6 @@ export const firebaseConfig = {
 };
 
 // 사용할 Gemini 모델 (앞에서부터 차례로 시도합니다).
-// 모델이 종료(404)되면 다음 모델로 자동 전환됩니다.
+// 앞 모델이 실패하면(종료, 사용량 초과, 접속 몰림 등) 다음 모델로 자동 전환됩니다.
 // 새 모델이 나오면 맨 앞에 추가하세요.
-export const AI_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
+export const AI_MODELS = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite"];
