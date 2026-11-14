@@ -3,7 +3,7 @@ import { unitsFor, findUnit, drawProblems } from "./bank.js";
 import * as DB from "./db.js";
 import { initAI, analyzeProblem, moreProblems, cleanProblem, problemTextOf, correctAnswerOf } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
-import { typeOf, isMulti, isShortChoices, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
+import { typeOf, isMulti, isShortChoices, richText, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
 import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
 import { openCropper } from "./cropper.js";
 import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
@@ -434,7 +434,7 @@ function pickBankUnit(subject, message, allowNone = false) {
 // ---------------------------------------------------------- 오답 상세
 // AI가 옮겨 쓴 문제를 문서처럼 보여 준다
 function docHtml(o, figure = false) {
-  return `<p class="doc-q">${esc(o.question)}</p>
+  return `<div class="doc-q">${richText(o.question)}</div>
     ${figure ? `<div class="doc-fig" id="figBox"><div class="spinner small"></div></div>` : ""}
     ${isMulti(o) ? partsHtml(o) : ""}
     ${typeOf(o) === "choice" ? `<ol class="doc-choices ${isShortChoices(o.choices) ? "short" : ""}">${o.choices.map((c, i) => `<li><span>${"①②③④⑤"[i]}</span>${esc(c)}</li>`).join("")}</ol>` : ""}
@@ -686,7 +686,7 @@ async function renderPractice(id) {
       ${p.from === "bank" ? `<small class="muted">· 문제은행</small>` : ""}
     </div>
     <section class="card question" style="${subjVars(n.subject)}">
-      <p class="q-text">${esc(q.question)}</p>
+      <div class="q-text">${richText(q.question)}</div>
       ${answerInput(q, p.a, { checked: p.checked, partResults: p.checked && isMulti(q) ? gradeParts(q, p.a) : null })}
       ${p.checked ? `<div class="feedback ${r === true ? "ok" : r === false ? "no" : "neutral"}">
         <b>${isMulti(q)
@@ -745,7 +745,7 @@ async function renderRoundResult(n, p) {
     </section>
     ${!perfect ? `<section class="card">
       <h3>📌 틀린 문제 다시 보기</h3>
-      ${p.problems.map((q, i) => p.results[i] ? "" : `<div class="review"><p>${esc(q.question)}</p>${isMulti(q) ? partsHtml(q) : ""}<p class="ans">정답: ${esc(answerText(q))}</p><p class="muted">${esc(q.explanation)}</p></div>`).join("")}
+      ${p.problems.map((q, i) => p.results[i] ? "" : `<div class="review"><div class="rv-q">${richText(q.question)}</div>${isMulti(q) ? partsHtml(q) : ""}<p class="ans">정답: ${esc(answerText(q))}</p><p class="muted">${esc(q.explanation)}</p></div>`).join("")}
     </section>` : ""}
     ${perfect ? `<button class="btn primary big full" id="home">🏠 홈으로</button>` : `<button class="btn primary big full" id="more">💪 동일 유형 문제 더 풀기</button>`}
     <a class="btn full" href="#/note/${n.id}">오답노트로 돌아가기</a>

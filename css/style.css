@@ -491,3 +491,18 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .p-answers.alone { break-before: auto; page-break-before: auto; margin-top: 4mm; border-top: 0; padding-top: 0; }
 .p-ans-title { font-size: .9em; color: #555; font-weight: 600; text-align: right; }
 .print-bar .seg button { padding: 8px 12px; }
+
+/* <보기> 상자: 교과서처럼 테두리 안에, 짧으면 한 줄에 2개 */
+.rt-text { white-space: pre-wrap; display: block; }
+.bogi { position: relative; border: 1.5px solid #B9B4AA; border-radius: 10px; padding: 16px 14px 10px; margin: 14px 0 6px; white-space: normal; background: #fff; }
+.bogi-title { position: absolute; top: -11px; left: 50%; transform: translateX(-50%); background: #fff; padding: 0 10px; font-size: .85em; font-weight: 800; letter-spacing: .3em; line-height: 1.4; }
+.bogi-title::before { content: "<"; letter-spacing: 0; margin-right: 2px; }
+.bogi-title::after { content: ">"; letter-spacing: 0; margin-left: -.1em; }
+.bogi-items { display: grid; grid-template-columns: 1fr; gap: 8px 16px; }
+.bogi-items.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.bogi-item { display: flex; gap: 6px; align-items: baseline; line-height: 1.7; }
+.bogi-item b { flex-shrink: 0; }
+.q-text .rt-text, .doc-q .rt-text { line-height: 1.85; }
+.paper .bogi { border-color: #555; border-radius: 2mm; padding: 5mm 4mm 3mm; margin: 4mm 0 2mm; break-inside: avoid; }
+.paper .bogi-items { gap: 2mm 8mm; }
+.paper .bogi-items.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
