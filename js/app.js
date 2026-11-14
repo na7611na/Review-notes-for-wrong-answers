@@ -1,9 +1,9 @@
 import { SUBJECTS, SUBJECT_KEYS, GRADES, BANDS, bandOf, REASONS, ENCOURAGE, PRAISE, pick } from "./data.js";
 import { unitsFor, findUnit, drawProblems } from "./bank.js";
 import * as DB from "./db.js";
-import { initAI, analyzeProblem, moreProblems, cleanProblem } from "./ai.js";
+import { initAI, analyzeProblem, moreProblems, cleanProblem, problemTextOf, correctAnswerOf } from "./ai.js";
 import { $app, state, esc, go, fmtDate, toast, loading, modal, confirmBox, layout, subjChip, subjVars, statusBadge, noteById } from "./ui.js";
-import { typeOf, answerInput, answerText, autoGrade, hasAnswer } from "./answer.js";
+import { typeOf, isMulti, answerInput, answerText, autoGrade, hasAnswer, gradeParts, partsHtml, bindAnswers } from "./answer.js";
 import { renderExams, renderExamNew, renderExam, renderPrint, forgetImage, chapterOf } from "./exam.js";
 import { openCropper } from "./cropper.js";
 import { CURRICULUM, termsOf, currentTerm, termOfChapter } from "./curriculum.js";
@@ -436,6 +436,7 @@ function pickBankUnit(subject, message, allowNone = false) {
 function docHtml(o, figure = false) {
   return `<p class="doc-q">${esc(o.question)}</p>
     ${figure ? `<div class="doc-fig" id="figBox"><div class="spinner small"></div></div>` : ""}
+    ${isMulti(o) ? partsHtml(o) : ""}
     ${typeOf(o) === "choice" ? `<ol class="doc-choices">${o.choices.map((c, i) => `<li><span>${"①②③④⑤"[i]}</span>${esc(c)}</li>`).join("")}</ol>` : ""}
     ${o.hasFigure && !figure ? `<p class="warn small">그림이 있는 문제예요. 그림은 아래 원본 사진에서 확인해요.</p>` : ""}`;
 }
@@ -456,7 +457,7 @@ async function renderNote(id) {
     ${n.original ? `<section class="card doc">
       <h3>📄 다시 입력한 문제 <small class="muted">채점 표시 없이 · 맞춤형 문제에 저장됨</small><span class="h3-tools"><button class="btn small" id="reAI2">🔄 다시 분석</button><button class="btn small" id="editDoc">✏️ 고치기</button></span></h3>
       ${docHtml(n.original, n.hasFigureImg)}
-      <details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(answerText(n.original))}${n.original.explanation ? "\n" + esc(n.original.explanation) : ""}</p></details>
+      <details class="fold"><summary>정답과 풀이 보기</summary><p class="pre">${esc(correctAnswerOf(n.original))}</p></details>
       <details class="fold" id="origFold"><summary>📸 원본 사진 보기</summary><div class="photo-preview" id="photo"><img src="${n.thumb}" alt="문제 사진" class="blur"></div></details>
     </section>` : `<section class="card">
       <h3>📸 틀린 문제</h3>
@@ -542,10 +543,10 @@ async function renderNote(id) {
 }
 
 // 저장된 사진을 AI로 다시 분석 (성공하면 true)
-async function reanalyze(n, { quiet = false } = {}) {
+async function reanalyze(n) {
   const img = await DB.getImage(state.uid, n.id);
-  if (!img) { if (!quiet) toast("사진을 불러오지 못했어요."); return quiet ? { ok: false, error: "사진 없음" } : false; }
-  if (!quiet) loading(true, "AI가 문제를 다시 입력하고 동일 유형 문제를 만드는 중… 🔍");
+  if (!img) { toast("사진을 불러오지 못했어요."); return false; }
+  loading(true, "AI가 문제를 다시 입력하고 동일 유형 문제를 만드는 중… 🔍");
   try {
     const r = await runAnalysis({ image: img, subject: n.subject, reasons: n.reasons || [], memo: n.memo, chapter: n.chapter });
     const patch = { ...r.fields, bankUnitId: n.bankUnitId || r.fields.bankUnitId };
@@ -553,60 +554,41 @@ async function reanalyze(n, { quiet = false } = {}) {
     if (r.figure) await DB.saveFigure(state.uid, n.id, r.figure);
     await DB.updateNote(state.uid, n.id, patch); Object.assign(n, patch);
     forgetImage(n.id);
-    if (quiet) return { ok: true };
     loading(false); toast("분석을 마쳤어요 ✨ 맞춤형 문제에도 저장됐어요.");
     return true;
   } catch (e) {
     console.warn(e);
-    if (quiet) return { ok: false, error: aiErrorMessage(e), fatal: /genai config|사용량|설정|인터넷/.test(aiErrorMessage(e)) };
     loading(false);
     toast(aiErrorMessage(e), 6000);
     return false;
   }
 }
 
-// 예전 방식(1/2, x²처럼 글자로 쓴 수식)으로 저장된 문제인지
-const OLD_MATH = /\d+\s*\/\s*\d+|[½⅓⅔¼¾²³√×÷]/;
-function isOldFormat(n) {
-  if (!n.original) return true;
-  const o = n.original, text = [o.question, ...(o.choices || []), o.answer].join(" ");
-  return !text.includes("$") && OLD_MATH.test(text);
+// AI가 잘못 읽은 글자를 직접 고친다 (여러 문항이면 소문항마다)
+function answerFields(q, prefix) {
+  const t = typeOf(q);
+  return t === "choice"
+    ? `<label>보기 (한 줄에 하나씩)<textarea name="${prefix}choices" rows="${Math.min(5, q.choices.length)}">${esc(q.choices.join("\n"))}</textarea></label>
+       <label>정답 번호<input name="${prefix}answer" type="number" min="1" max="5" value="${q.answer + 1}"></label>`
+    : `<label>${t === "essay" ? "모범 답안" : "정답"}<input name="${prefix}answer" value="${esc(q.answer)}"></label>`;
+}
+function readFields(q, f, prefix) {
+  const t = typeOf(q), ans = String(f[prefix + "answer"] ?? "").trim();
+  return t === "choice"
+    ? { type: t, choices: String(f[prefix + "choices"]).split("\n").map((x) => x.trim()).filter(Boolean), answer: Number(ans) - 1 }
+    : { type: t, answer: ans, accept: t === "short" && ans === String(q.answer) ? q.accept : [] };
 }
 
-// 여러 문제를 차례로 다시 분석 (진행 상황 표시, 중단 가능)
-async function reanalyzeMany(list) {
-  let stop = false, ok = 0;
-  const fails = [];
-  const m = modal(`<h3>🔄 다시 분석하는 중</h3>
-    <p class="center"><b id="raNow">0</b> / ${list.length}</p>
-    <div class="bar"><span id="raBar"></span></div>
-    <p class="muted center small" id="raMsg">한 문제에 20~30초쯤 걸려요. 화면을 끄지 말고 기다려 주세요.</p>
-    <button class="btn ghost full" id="raStop">그만하기</button>`, (el) => {
-    el.querySelector("#raStop").onclick = () => { stop = true; el.querySelector("#raMsg").textContent = "지금 문제까지만 하고 멈출게요…"; };
-  });
-  m.dataset.lock = "1"; // 바깥을 눌러도 닫히지 않게
-  for (let i = 0; i < list.length && !stop; i++) {
-    const r = await reanalyze(list[i], { quiet: true });
-    if (r.ok) ok++; else fails.push(r.error);
-    m.querySelector("#raNow").textContent = i + 1;
-    m.querySelector("#raBar").style.width = `${((i + 1) / list.length) * 100}%`;
-    if (r.fatal) { stop = true; break; } // 설정·사용량 문제는 다음 문제도 똑같이 실패
-  }
-  m.remove();
-  const msg = `${ok}문제를 다시 분석했어요.` + (fails.length ? ` ${fails.length}문제는 실패했어요 (${fails[fails.length - 1]})` : "");
-  toast(msg, fails.length ? 7000 : 3500);
-}
-
-// AI가 잘못 읽은 글자를 직접 고친다
 function editDocument(n) {
-  const o = n.original, t = typeOf(o);
+  const o = n.original, multi = isMulti(o);
   modal(`<h3>✏️ 문제 고치기</h3>
     <form class="form" id="docForm">
       <p class="muted small">수식은 $ 사이에 써요. 예: 분수 $\\frac{1}{2}$ → <code>$\\frac{1}{2}$</code>, 대분수 <code>$2\\frac{1}{3}$</code></p>
-      <label>문제<textarea name="question" rows="5">${esc(o.question)}</textarea></label>
-      ${t === "choice" ? `<label>보기 (한 줄에 하나씩)<textarea name="choices" rows="5">${esc(o.choices.join("\n"))}</textarea></label>
-        <label>정답 번호<input name="answer" type="number" min="1" max="5" value="${o.answer + 1}"></label>`
-      : `<label>${t === "essay" ? "모범 답안" : "정답"}<input name="answer" value="${esc(o.answer)}"></label>`}
+      <label>${multi ? "공통 지문·조건" : "문제"}<textarea name="question" rows="5">${esc(o.question)}</textarea></label>
+      ${multi ? o.parts.map((q, i) => `<fieldset class="part-edit"><legend>${esc(q.label)}</legend>
+          <label>소문항<textarea name="p${i}question" rows="2">${esc(q.question)}</textarea></label>
+          ${answerFields(q, `p${i}`)}
+        </fieldset>`).join("") : answerFields(o, "")}
       <label>풀이<textarea name="explanation" rows="3">${esc(o.explanation || "")}</textarea></label>
       <p class="error" id="docErr"></p>
       <div class="btn-row"><button class="btn primary" type="submit">저장</button><button class="btn ghost" type="button" data-close>취소</button></div>
@@ -614,17 +596,13 @@ function editDocument(n) {
     el.querySelector("#docForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target));
-      const fixed = cleanProblem({
-        type: t, question: f.question.trim(), explanation: f.explanation.trim(), accept: t === "short" && f.answer.trim() === String(o.answer) ? o.accept : [],
-        ...(t === "choice" ? { choices: f.choices.split("\n").map((x) => x.trim()).filter(Boolean), answer: Number(f.answer) - 1 } : { answer: f.answer.trim() }),
-      });
+      const base = { question: f.question.trim(), explanation: f.explanation.trim() };
+      const fixed = cleanProblem(multi
+        ? { ...base, type: "multi", parts: o.parts.map((q, i) => ({ label: q.label, question: String(f[`p${i}question`]).trim(), explanation: q.explanation, ...readFields(q, f, `p${i}`) })) }
+        : { ...base, ...readFields(o, f, "") });
       if (!fixed) { el.querySelector("#docErr").textContent = "문제, 보기(2~5개), 정답을 확인해 주세요."; return; }
       Object.assign(fixed, { hasFigure: o.hasFigure, figureBox: o.figureBox || null });
-      const patch = {
-        original: fixed,
-        problemText: fixed.question + (fixed.choices ? "\n" + fixed.choices.map((c, i) => `${"①②③④⑤"[i]} ${c}`).join("\n") : ""),
-        correctAnswer: answerText(fixed) + (fixed.explanation ? `\n${fixed.explanation}` : ""),
-      };
+      const patch = { original: fixed, problemText: problemTextOf(fixed), correctAnswer: correctAnswerOf(fixed) };
       await DB.updateNote(state.uid, n.id, patch); Object.assign(n, patch);
       el.remove(); toast("고쳤어요."); renderNote(n.id);
     };
@@ -676,7 +654,7 @@ async function askBankSet(n, seen) {
   return { problems: drawProblems(u, 3, seen), from: "bank" };
 }
 
-const resetQ = (p) => Object.assign(p, { a: {}, checked: false });
+const resetQ = (p) => Object.assign(p, { a: {}, checked: false, self: false });
 
 async function renderPractice(id) {
   const n = noteById(id);
@@ -695,7 +673,7 @@ async function renderPractice(id) {
   const q = p.problems[p.idx];
   const t = typeOf(q);
   const r = p.results[p.idx];
-  const needSelf = p.checked && t === "essay" && r == null;
+  const needSelf = p.checked && r == null && (t === "essay" || isMulti(q));
   layout(`
     <header class="subject-head" style="${subjVars(n.subject)}">
       <a href="#/note/${id}" class="back">‹</a>
@@ -709,11 +687,13 @@ async function renderPractice(id) {
     </div>
     <section class="card question" style="${subjVars(n.subject)}">
       <p class="q-text">${esc(q.question)}</p>
-      ${answerInput(q, p.a, { checked: p.checked })}
+      ${answerInput(q, p.a, { checked: p.checked, partResults: p.checked && isMulti(q) ? gradeParts(q, p.a) : null })}
       ${p.checked ? `<div class="feedback ${r === true ? "ok" : r === false ? "no" : "neutral"}">
-        <b>${r === true ? "정답이에요! 🎉" : r === false ? `아쉬워요! 정답은 ${esc(answerText(q))} 이에요.` : `모범 답안: ${esc(answerText(q))}`}</b>
+        <b>${isMulti(q)
+          ? (r === true ? "모두 맞혔어요! 🎉" : r === false ? `아쉬워요! ${q.parts.length}문항 중 ${gradeParts(q, p.a).filter((x) => x === true).length}개 맞았어요.` : "서술형 소문항은 모범 답안과 비교해 보세요.")
+          : r === true ? "정답이에요! 🎉" : r === false ? `아쉬워요! 정답은 ${esc(answerText(q))} 이에요.` : `모범 답안: ${esc(answerText(q))}`}</b>
         <p>${esc(q.explanation)}</p>
-        ${t === "essay" ? `<div class="self-check"><span>내 답과 비교해 보세요</span>
+        ${t === "essay" || (isMulti(q) && (r == null || p.self)) ? `<div class="self-check"><span>내 답과 비교해 보세요</span>
           <button class="ok ${r === true ? "on" : ""}" data-self="1">○ 맞았어요</button>
           <button class="no ${r === false ? "on" : ""}" data-self="0">✕ 틀렸어요</button></div>` : ""}
       </div>` : ""}
@@ -723,14 +703,16 @@ async function renderPractice(id) {
     </button>
   `);
   const act = $app.querySelector("#act");
-  $app.querySelectorAll("[data-choice]").forEach((b) => b.onclick = () => { p.a.selected = +b.dataset.choice; renderPractice(id); });
-  const txt = $app.querySelector("[data-text]");
-  if (txt && !p.checked) {
-    txt.oninput = () => { p.a.text = txt.value; act.disabled = !hasAnswer(q, p.a); };
-    txt.onkeydown = (e) => { if (e.key === "Enter" && t === "short" && hasAnswer(q, p.a)) act.click(); };
-    txt.focus();
+  if (!p.checked) {
+    // 객관식을 고르거나 답을 쓰면 버튼만 켠다 (다시 그리지 않아 입력 중인 칸이 그대로)
+    bindAnswers($app, () => p.a, {
+      getP: () => q,
+      onChange: () => { act.disabled = !hasAnswer(q, p.a); },
+      onSubmit: () => { if (hasAnswer(q, p.a)) act.click(); else toast("아직 비어 있는 칸이 있어요."); },
+    });
+    $app.querySelector("[data-text]")?.focus();
   }
-  $app.querySelectorAll("[data-self]").forEach((b) => b.onclick = () => { p.results[p.idx] = b.dataset.self === "1"; renderPractice(id); });
+  $app.querySelectorAll("[data-self]").forEach((b) => b.onclick = () => { p.results[p.idx] = b.dataset.self === "1"; p.self = true; renderPractice(id); });
   act.onclick = () => {
     if (!p.checked) { p.checked = true; p.results[p.idx] = autoGrade(q, p.a); }
     else { p.idx++; resetQ(p); }
@@ -763,7 +745,7 @@ async function renderRoundResult(n, p) {
     </section>
     ${!perfect ? `<section class="card">
       <h3>📌 틀린 문제 다시 보기</h3>
-      ${p.problems.map((q, i) => p.results[i] ? "" : `<div class="review"><p>${esc(q.question)}</p><p class="ans">정답: ${esc(answerText(q))}</p><p class="muted">${esc(q.explanation)}</p></div>`).join("")}
+      ${p.problems.map((q, i) => p.results[i] ? "" : `<div class="review"><p>${esc(q.question)}</p>${isMulti(q) ? partsHtml(q) : ""}<p class="ans">정답: ${esc(answerText(q))}</p><p class="muted">${esc(q.explanation)}</p></div>`).join("")}
     </section>` : ""}
     ${perfect ? `<button class="btn primary big full" id="home">🏠 홈으로</button>` : `<button class="btn primary big full" id="more">💪 동일 유형 문제 더 풀기</button>`}
     <a class="btn full" href="#/note/${n.id}">오답노트로 돌아가기</a>
@@ -785,7 +767,6 @@ async function renderRoundResult(n, p) {
 // ---------------------------------------------------------- 설정
 function renderSettings() {
   const p = state.profile || {};
-  const oldList = state.notes.filter(isOldFormat);
   layout(`
     <header class="page-head"><h1>설정</h1></header>
     <section class="card">
@@ -804,15 +785,6 @@ function renderSettings() {
       <a class="btn" href="#/bank">문제은행 관리하기 ›</a>
     </section>
     <section class="card">
-      <h3>🔄 저장된 문제 다시 분석</h3>
-      <p class="muted">예전에 저장해서 분수가 1/2처럼 나오거나, 아직 AI가 분석하지 못한 문제를 다시 분석해요. 내 계정(${esc(p.name || "")})의 문제만 바뀌어요.</p>
-      <div class="btn-col">
-        <button class="btn primary" id="raOld" ${oldList.length ? "" : "disabled"}>예전 방식·분석 안 된 문제만 (${oldList.length}개)</button>
-        <button class="btn" id="raAll" ${state.notes.length ? "" : "disabled"}>전체 다시 분석 (${state.notes.length}개)</button>
-      </div>
-      <p class="muted small">한 문제에 AI 요청이 2번 쓰여요. 무료 사용량이 다 되면 자동으로 멈추고, 다음 날 이어서 하면 돼요. ✏️ 고치기로 바꾼 내용은 새 분석으로 바뀌어요.</p>
-    </section>
-    <section class="card">
       <button class="btn danger ghost full" id="logout">로그아웃</button>
     </section>
   `, "settings");
@@ -824,13 +796,6 @@ function renderSettings() {
     toast("저장했어요.");
   };
   $app.querySelector("#logout").onclick = () => DB.logout();
-  const runMany = async (list, label) => {
-    if (!(await confirmBox(`${label} ${list.length}문제를 다시 분석할까요?`, `약 ${Math.ceil((list.length * 25) / 60)}분 걸려요. 중간에 그만둘 수 있어요.`, "시작"))) return;
-    await reanalyzeMany(list);
-    renderSettings();
-  };
-  $app.querySelector("#raOld").onclick = () => runMany(oldList, "예전 방식·분석 안 된");
-  $app.querySelector("#raAll").onclick = () => runMany([...state.notes], "전체");
 }
 
 // ---------------------------------------------------------- 문제은행 관리

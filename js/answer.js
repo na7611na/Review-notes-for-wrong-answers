@@ -26,38 +26,114 @@ export function gradeShort(input, p) {
 }
 
 export const typeOf = (p) => p?.type || (p?.choices ? "choice" : "short");
-export const answerText = (p) => typeOf(p) === "choice" ? `${NUM[p.answer]} ${p.choices[p.answer] ?? ""}` : String(p.answer ?? "");
-export const TYPE_LABEL = { choice: "객관식", short: "단답형", essay: "서술형" };
+export const isMulti = (p) => p?.type === "multi";
+export const partLabel = (q, i) => q.label || `(${i + 1})`;
+export const answerText = (p) => {
+  if (isMulti(p)) return p.parts.map((q, i) => `${partLabel(q, i)} ${answerText(q)}`).join("   ");
+  return typeOf(p) === "choice" ? `${NUM[p.answer]} ${p.choices[p.answer] ?? ""}` : String(p.answer ?? "");
+};
+export const TYPE_LABEL = { choice: "객관식", short: "단답형", essay: "서술형", multi: "여러 문항" };
 
-/**
- * 답 입력 영역 HTML
- * @param p 문제  @param a { selected, text }  @param o { checked, key, numbersOnly(보기 글자 없이 번호만) , count(보기 수) }
- */
-export function answerInput(p, a, o = {}) {
+// 소문항별 답 칸 (a.parts[i])
+const slot = (a, part) => (part === "" || part == null ? a : ((a.parts ||= [])[+part] ||= {}));
+
+function singleInput(p, a, o) {
   const t = typeOf(p);
+  const attrs = `data-key="${o.key ?? ""}" data-part="${o.part ?? ""}"`;
   if (t === "choice" || o.numbersOnly) {
     const count = o.count || p?.choices?.length || 5;
-    return `<div class="choices ${o.numbersOnly ? "nums" : ""}">${Array.from({ length: count }, (_, i) => {
+    const long = !o.numbersOnly && Math.max(...p.choices.map(choiceLen)) > 8;
+    return `<div class="choices ${o.numbersOnly ? "nums" : long ? "" : "short"}">${Array.from({ length: count }, (_, i) => {
       let cls = "";
       if (o.checked && p) cls = i === p.answer ? "correct" : i === a.selected ? "wrong" : "dim";
       else if (i === a.selected) cls = "sel";
-      return `<button class="choice ${cls}" data-choice="${i}" data-key="${o.key ?? ""}" ${o.checked ? "disabled" : ""}><span class="no">${NUM[i]}</span>${o.numbersOnly ? "" : esc(p.choices[i])}</button>`;
+      return `<button class="choice ${cls}" data-choice="${i}" ${attrs} ${o.checked ? "disabled" : ""}><span class="no">${NUM[i]}</span>${o.numbersOnly ? "" : esc(p.choices[i])}</button>`;
     }).join("")}</div>`;
   }
   const ph = t === "essay" ? "풀이와 답을 써 보세요" : "답을 입력하세요";
-  const field = t === "essay"
-    ? `<textarea class="answer-text" rows="4" data-text data-key="${o.key ?? ""}" placeholder="${ph}" ${o.checked ? "disabled" : ""}>${esc(a.text || "")}</textarea>`
-    : `<input class="answer-text" data-text data-key="${o.key ?? ""}" placeholder="${ph}" value="${esc(a.text || "")}" ${o.checked ? "disabled" : ""} autocomplete="off">`;
-  return field;
+  return t === "essay"
+    ? `<textarea class="answer-text" rows="4" data-text ${attrs} placeholder="${ph}" ${o.checked ? "disabled" : ""}>${esc(a.text || "")}</textarea>`
+    : `<input class="answer-text" data-text ${attrs} placeholder="${ph}" value="${esc(a.text || "")}" ${o.checked ? "disabled" : ""} autocomplete="off" enterkeyhint="next">`;
 }
 
-/** 자동 채점: true/false, 서술형·정답 모름은 null (스스로 ○/✕) */
+/**
+ * 답 입력 영역 HTML
+ * @param p 문제  @param a { selected, text, parts:[{selected,text}] }
+ * @param o { checked, key, numbersOnly(보기 글자 없이 번호만), count(보기 수), partResults(소문항별 채점) }
+ */
+export function answerInput(p, a, o = {}) {
+  if (!isMulti(p)) return singleInput(p, a, o);
+  const done = p.parts.filter((q, i) => hasAnswer(q, (a.parts || [])[i] || {})).length;
+  return `<div class="parts">
+    ${o.checked ? "" : `<p class="parts-count" data-key="${o.key ?? ""}">✏️ 소문항 ${p.parts.length}개 중 <b>${done}</b>개 입력</p>`}
+    ${p.parts.map((q, i) => {
+      const r = o.partResults?.[i];
+      return `<div class="part ${r === true ? "ok" : r === false ? "no" : ""}">
+        <div class="part-q"><b class="part-label">${esc(partLabel(q, i))}</b><span>${esc(q.question)}</span>${r === true ? `<span class="mark ok">○</span>` : r === false ? `<span class="mark no">✕</span>` : ""}</div>
+        ${singleInput(q, (a.parts || [])[i] || {}, { ...o, part: i })}
+        ${o.checked ? `<p class="part-ans">정답: ${esc(answerText(q))}</p>` : ""}
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+
+// 읽기 전용: 소문항 목록 (문서 보기·종이 채점용)
+export function partsHtml(p) {
+  return `<ol class="parts-view">${p.parts.map((q, i) => `<li><b>${esc(partLabel(q, i))}</b> <span>${esc(q.question)}</span>
+    ${typeOf(q) === "choice" ? `<div class="pv-choices">${q.choices.map((c, j) => `<span>${NUM[j]} ${esc(c)}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
+}
+
+/** 소문항별 자동 채점 결과 */
+export const gradeParts = (p, a) => p.parts.map((q, i) => autoGrade(q, (a.parts || [])[i] || {}));
+
+/** 자동 채점: true/false, 서술형·정답 모름은 null (스스로 ○/✕). 여러 문항은 하나라도 틀리면 false */
 export function autoGrade(p, a) {
   if (!p) return null;
+  if (isMulti(p)) {
+    const rs = gradeParts(p, a);
+    return rs.includes(false) ? false : rs.includes(null) ? null : true;
+  }
   const t = typeOf(p);
   if (t === "choice") return a.selected === p.answer;
   if (t === "short") return gradeShort(a.text, p);
   return null;
 }
 
-export const hasAnswer = (p, a, o = {}) => (typeOf(p) === "choice" || o.numbersOnly) ? a.selected != null : !!String(a.text || "").trim();
+export const hasAnswer = (p, a, o = {}) => {
+  if (isMulti(p)) return p.parts.every((q, i) => hasAnswer(q, (a.parts || [])[i] || {}));
+  return (typeOf(p) === "choice" || o.numbersOnly) ? a.selected != null : !!String(a.text || "").trim();
+};
+
+/**
+ * 답 입력 이벤트 연결. getA(key) 는 그 문제의 답 객체를 돌려준다.
+ * Enter를 누르면 다음 빈칸으로 넘어가고, 마지막 칸이면 onSubmit
+ */
+export function bindAnswers(root, getA, { getP, onChange, onSubmit } = {}) {
+  // 여러 문항이면 "몇 개 입력했는지"를 바로 고친다
+  const refreshCount = (key) => {
+    const p = getP?.(key), box = root.querySelector(`.parts-count[data-key="${key}"] b`);
+    if (box && isMulti(p)) box.textContent = p.parts.filter((q, i) => hasAnswer(q, (getA(key).parts || [])[i] || {})).length;
+  };
+  root.querySelectorAll("[data-choice]").forEach((b) => b.onclick = () => {
+    slot(getA(b.dataset.key), b.dataset.part).selected = +b.dataset.choice;
+    b.parentElement.querySelectorAll(".choice").forEach((x) => x.classList.toggle("sel", x === b));
+    onChange?.(b.dataset.key); refreshCount(b.dataset.key);
+  });
+  const fields = [...root.querySelectorAll("[data-text]")];
+  fields.forEach((t, i) => {
+    t.oninput = () => { slot(getA(t.dataset.key), t.dataset.part).text = t.value; onChange?.(t.dataset.key); refreshCount(t.dataset.key); };
+    if (t.tagName === "INPUT") t.onkeydown = (e) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      e.preventDefault();
+      const next = fields[i + 1];
+      if (next) next.focus(); else onSubmit?.();
+    };
+  });
+}
+
+// 보기 글자 길이 (수식 기호 제외) — 인쇄·화면에서 한 줄에 몇 개 놓을지 정할 때 씀
+export function choiceLen(c) {
+  const t = String(c);
+  const fracs = (t.match(/\\[dt]?frac/g) || []).length;
+  return t.replace(/\\[a-zA-Z]+/g, "").replace(/[${}^_\s]/g, "").length + fracs;
+}

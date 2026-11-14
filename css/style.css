@@ -330,39 +330,65 @@ input.answer-text { font-weight: 600; }
 
 /* 인쇄 화면 */
 body.print-mode { background: #EDEAE4; }
-.print-bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 16px; background: rgba(251,248,243,.95); backdrop-filter: blur(8px); box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+.print-bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; background: rgba(251,248,243,.95); backdrop-filter: blur(8px); box-shadow: 0 2px 10px rgba(0,0,0,.06); }
 .check.inline { padding: 8px 12px; }
 body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
-.paper { background: #fff; color: #111; max-width: 210mm; margin: 16px auto 60px; padding: 14mm 14mm; box-shadow: 0 4px 20px rgba(0,0,0,.1); font-size: 11pt; line-height: 1.6; }
-.p-head { border-bottom: 2.5px solid #111; padding-bottom: 8px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
-.p-head small { color: #555; }
-.p-head h1 { font-size: 17pt; }
-.p-head table { border-collapse: collapse; font-size: 10pt; }
-.p-head th, .p-head td { border: 1px solid #333; padding: 4px 8px; }
+
+/* 문제지: 학생이 읽기 편하게 (큰 글자, 넉넉한 줄 간격, 문제 사이 여백) */
+.paper { background: #fff; color: #111; max-width: 210mm; margin: 16px auto 60px; padding: 14mm 15mm; box-shadow: 0 4px 20px rgba(0,0,0,.1);
+  font-size: 12pt; line-height: 1.85; letter-spacing: -0.01em; word-break: keep-all; overflow-wrap: anywhere;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact; /* 문제 번호 칸 등 배경색도 인쇄 */ }
+.paper.big { font-size: 14pt; line-height: 1.9; }
+.paper .katex { font-size: 1.1em; }
+.p-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; border-bottom: 3px solid #111; padding-bottom: 8px; }
+.p-title small { color: #555; font-size: .8em; }
+.p-title h1 { font-size: 1.55em; line-height: 1.3; margin-top: 2px; }
+.p-head table { border-collapse: collapse; font-size: .82em; line-height: 1.4; }
+.p-head th, .p-head td { border: 1px solid #333; padding: 3px 8px; }
 .p-head th { background: #F2F2F2; font-weight: 700; }
-.p-head td { min-width: 52px; }
-.p-items { columns: 1; }
-.p-item { break-inside: avoid; padding: 10px 0 14px; border-bottom: 1px dashed #BBB; }
-.p-q { display: flex; gap: 8px; }
-.p-q b { flex-shrink: 0; font-size: 12pt; }
-.p-q img { max-width: 100%; max-height: 95mm; object-fit: contain; }
-.p-q .pre { white-space: pre-wrap; background: none; padding: 0; margin: 0; border-radius: 0; }
-.p-choices { list-style: none; margin: 8px 0 0 22px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(45%, 1fr)); gap: 10px 16px; line-height: 1.9; }
-.p-short { margin: 10px 0 0 22px; }
-.p-short span { display: inline-block; width: 45%; border-bottom: 1px solid #333; }
-.p-essay { margin: 10px 0 0 22px; height: 30mm; background: repeating-linear-gradient(transparent 0 9mm, #CCC 9mm calc(9mm + 1px)); }
-.p-answers { break-before: page; margin-top: 30px; padding-top: 16px; border-top: 2.5px solid #111; }
-.p-answers h2 { font-size: 14pt; margin-bottom: 10px; }
-.p-ans { break-inside: avoid; padding: 6px 0; border-bottom: 1px solid #EEE; }
-.p-ans p { margin: 2px 0 0 20px; color: #333; font-size: 10pt; }
-.p-ch { color: #777; font-size: 9pt; }
+.p-head td { min-width: 30mm; }
+.p-score { text-align: right; }
+.p-guide { margin: 6px 0 4mm; font-size: .78em; color: #555; }
+.p-item { display: flex; gap: 4mm; padding: 6mm 0 7mm; border-bottom: 1px solid #DDD; break-inside: avoid; page-break-inside: avoid; }
+.p-item:last-child { border-bottom: 0; }
+.p-num { flex-shrink: 0; width: 9mm; height: 9mm; border-radius: 2.5mm; background: #111; color: #fff; font-weight: 800; display: grid; place-items: center; font-size: .95em; line-height: 1; margin-top: .2em; }
+.p-body { flex: 1; min-width: 0; }
+.p-stem { white-space: pre-wrap; }
+.p-part { margin-top: 4mm; padding-left: 2mm; border-left: 3px solid #E4E4E4; }
+.p-pl { margin-right: 4px; }
+.p-fig, .p-photo { display: block; max-width: 85%; max-height: 80mm; margin: 3mm auto; object-fit: contain; }
+.p-photo { max-width: 100%; max-height: 110mm; margin: 0; }
+/* 보기: 길이에 따라 한 줄에 5·3·2·1개 */
+.p-choices { list-style: none; margin: 3mm 0 0; padding: 0 0 0 2mm; display: grid; gap: 2.5mm 6mm; }
+.p-choices.cols-5 { grid-template-columns: repeat(5, max-content); column-gap: 9mm; }
+.p-choices.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.p-choices.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.p-choices.cols-1 { grid-template-columns: 1fr; }
+.p-choices li { display: flex; gap: 2mm; align-items: baseline; }
+.p-cn { flex-shrink: 0; font-weight: 700; }
+.p-short { display: flex; align-items: flex-end; gap: 3mm; margin-top: 4mm; justify-content: flex-end; }
+.p-short span { font-weight: 700; font-size: .9em; }
+.p-short i { display: inline-block; width: 55mm; height: 9mm; border: 1.5px solid #333; border-radius: 2mm; }
+.p-essay { margin-top: 3mm; height: 36mm; border: 1.5px solid #333; border-radius: 2mm; background: repeating-linear-gradient(transparent 0 8.5mm, #D5D5D5 8.5mm calc(8.5mm + 1px)); background-origin: content-box; padding: 0 3mm; }
+.p-work { margin-top: 4mm; height: 32mm; border: 1px dashed #BBB; border-radius: 2mm; position: relative; }
+.p-work span { position: absolute; top: 1.5mm; left: 3mm; font-size: .7em; color: #999; }
+/* 정답과 해설 */
+.p-answers { break-before: page; page-break-before: always; margin-top: 12mm; padding-top: 4mm; border-top: 3px solid #111; font-size: .92em; }
+.p-answers h2 { font-size: 1.3em; margin-bottom: 3mm; }
+.p-answers h2 small { font-size: .65em; color: #666; font-weight: 500; margin-left: 6px; }
+.p-ans { display: flex; gap: 3mm; padding: 2.5mm 0; border-bottom: 1px solid #EEE; break-inside: avoid; }
+.p-an { flex-shrink: 0; width: 7mm; height: 7mm; border-radius: 2mm; background: #EEE; display: grid; place-items: center; font-size: .9em; line-height: 1; margin-top: .25em; }
+.p-aline { display: flex; flex-wrap: wrap; gap: 2mm 5mm; align-items: baseline; font-weight: 700; }
+.p-aline small { font-weight: 400; color: #888; font-size: .78em; }
+.p-ans p { margin: 1mm 0 0; color: #333; }
 
 @media print {
-  @page { size: A4; margin: 12mm; }
+  @page { size: A4; margin: 13mm 12mm; }
   body, body.print-mode { background: #fff !important; }
   .no-print, .print-bar, .bottom-nav, .toast, #loading { display: none !important; }
   .paper { box-shadow: none; margin: 0; padding: 0; max-width: none; }
 }
+
 
 /* 단원 고르기 */
 .chapter-row { margin-bottom: 10px; }
@@ -429,8 +455,6 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 /* 다시 분석 */
 .h3-tools { margin-left: auto; display: flex; gap: 6px; }
 .doc h3 .h3-tools .btn { margin-left: 0; }
-.bar { height: 10px; border-radius: 99px; background: #F0ECE5; overflow: hidden; margin: 6px 0 12px; }
-.bar span { display: block; height: 100%; width: 0; background: var(--primary); border-radius: 99px; transition: width .3s; }
 
 /* 틀린 이유: 짧은 칩으로 한 줄에 여러 개 */
 .reason-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px; }
@@ -440,3 +464,25 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .rchip input:checked + span { border-color: var(--primary); background: var(--primary-soft); color: #D65A3A; }
 .rchip input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
 @media (max-width: 420px) { .reason-chips { grid-template-columns: repeat(3, 1fr); } .rchip span { font-size: .84rem; padding: 8px 6px; } }
+
+/* 여러 문항(소문항별 답 칸) */
+.parts { display: flex; flex-direction: column; gap: 12px; }
+.parts-count { margin: 0; font-size: .86rem; color: var(--muted); }
+.parts-count b { color: var(--primary); }
+.part { border: 1.5px solid var(--line); border-radius: 14px; padding: 12px; background: #FDFCFA; }
+.part.ok { border-color: var(--ok); background: var(--ok-soft); }
+.part.no { border-color: var(--no); background: var(--no-soft); }
+.part-q { display: flex; gap: 8px; align-items: baseline; margin-bottom: 10px; line-height: 1.7; white-space: pre-wrap; }
+.part-label { flex-shrink: 0; color: var(--sc, var(--primary)); }
+.part-q .mark { font-size: 1.3rem; }
+.part-ans { margin: 8px 0 0; font-weight: 700; color: var(--ok); font-size: .92rem; }
+.part.no .part-ans { color: #C0392B; }
+.parts-view { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.parts-view li { background: #FAF8F4; border-radius: 10px; padding: 8px 12px; line-height: 1.7; }
+.pv-choices { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: .95rem; }
+.part-edit { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.part-edit legend { font-weight: 800; padding: 0 6px; }
+/* 짧은 보기는 화면에서도 한 줄에 여러 개 */
+.choices.short { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+/* 시험지 화면 가독성 */
+.exam-item .q-text, .question .q-text { line-height: 1.85; }

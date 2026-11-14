@@ -32,7 +32,7 @@ const SAME_TYPE = `
   · 수학·과학: 숫자(계수, 길이, 개수 등)만 바꿔요. 답이 깔끔하게 떨어지도록 숫자를 고르고, 단위·문맥은 그대로 둬요.
   · 국어·영어·사회: 같은 발문을 유지하고, 예문·단어·자료·보기 중 일부만 비슷한 수준의 다른 것으로 바꿔요.
   · 보기: 보기 개수와 배열 방식(숫자 크기순 등)은 원래 문제와 같게 하고, 보기 내용만 살짝 바꿔 정답 번호가 원래와 달라지게 해요.
-- 형식(type)과 보기 개수는 원래 문제와 같아요.`;
+- 형식(type)과 보기 개수는 원래 문제와 같아요. multi면 소문항 개수와 각 소문항의 형식도 같게 해요.`;
 
 // AI가 JSON 안에 \frac 처럼 역슬래시를 한 번만 쓰면 \f(폼피드)로 깨지므로 두 번으로 고친다
 const LATEX_CMD = /(?<!\\)\\(?=(?:frac|dfrac|tfrac|times|div|sqrt|cdot|cdots|ldots|le|leq|ge|geq|neq|ne|pm|mp|pi|theta|alpha|beta|gamma|angle|triangle|circ|left|right|text|mathrm|overline|vec|bar|square|therefore|because|approx|infty|log|sin|cos|tan|lim|sum|int|perp|parallel|sim|equiv|rightarrow|Rightarrow|quad|qquad|degree)(?![a-zA-Z]))/g;
@@ -59,7 +59,15 @@ async function run(parts) {
 
 // AI가 준 문제 하나를 검사하고 앱 형식으로 정리 (잘못되면 null)
 export function cleanProblem(p) {
-  if (!p || typeof p.question !== "string" || !p.question.trim()) return null;
+  if (!p) return null;
+  // 여러 문항: 공통 지문 + 소문항(1),(2)… 각각 답이 따로 있다
+  if (p.type === "multi" || (Array.isArray(p.parts) && p.parts.length > 1)) {
+    const parts = (p.parts || []).map((q) => { const c = cleanProblem({ ...q, type: q.type === "multi" ? "short" : q.type }); return c && { label: String(q.label || "").trim(), ...c }; });
+    if (parts.length < 2 || parts.length > 8 || parts.some((q) => !q)) return null;
+    parts.forEach((q, i) => { if (!q.label) q.label = `(${i + 1})`; });
+    return { type: "multi", question: String(p.question || "").trim() || "다음 물음에 답하시오.", parts, explanation: String(p.explanation || "") };
+  }
+  if (typeof p.question !== "string" || !p.question.trim()) return null;
   const type = ["choice", "short", "essay"].includes(p.type) ? p.type : Array.isArray(p.choices) && p.choices.length ? "choice" : "short";
   const explanation = String(p.explanation || "");
   if (type === "choice") {
@@ -77,7 +85,23 @@ const cleanList = (list) => (Array.isArray(list) ? list : []).map(cleanProblem).
 const FORMAT_HELP = `type은 "choice"(객관식), "short"(단답형: 숫자·단어·짧은 답), "essay"(서술형) 중 하나예요.
 - choice: choices에 보기 내용을 번호(①, 1) 등) 없이 순서대로 넣고, answer는 정답 보기의 번호(0부터 시작)예요.
 - short: answer에 정답, accept에 같은 뜻의 다른 표기(예: "5", "x=5", "5개")를 넣어요.
-- essay: answer에 모범 답안을 넣어요.`;
+- essay: answer에 모범 답안을 넣어요.
+- multi: 한 문제 안에 (1), (2)… 또는 ㉠, ㉡처럼 답을 따로 쓰는 칸이 여러 개면 type을 "multi"로 해요.
+  question에는 공통 지문·조건만 쓰고, parts에 소문항을 순서대로 넣어요.
+  parts의 각 항목: {"label":"(1)","type":"short","question":"소문항 내용","choices":[],"answer":"","accept":[],"explanation":""}
+  (소문항 type도 choice/short/essay 중 하나, 답이 하나뿐인 문제는 multi로 하지 않아요)`;
+
+// 예전 화면 호환용 글자 정보 (문제 글 / 정답과 풀이)
+const choiceLines = (q) => (q.choices ? "\n" + q.choices.map((c, i) => `${"①②③④⑤"[i]} ${c}`).join("\n") : "");
+export function problemTextOf(o) {
+  if (o.type === "multi") return o.question + "\n" + o.parts.map((q) => `${q.label} ${q.question}${choiceLines(q)}`).join("\n");
+  return o.question + choiceLines(o);
+}
+const answerOf = (q) => (q.type === "choice" ? `${"①②③④⑤"[q.answer]} ${q.choices[q.answer]}` : q.answer);
+export function correctAnswerOf(o) {
+  const ans = o.type === "multi" ? o.parts.map((q) => `${q.label} ${answerOf(q)}`).join("\n") : answerOf(o);
+  return ans + (o.explanation ? `\n${o.explanation}` : "");
+}
 
 // ---------------------------------------------------------- 동일 유형 검사
 // 숫자는 #로 바꾸고 띄어쓰기를 지운 뒤 두 글자씩 비교 (숫자만 바꾼 문제는 거의 1.0)
@@ -93,11 +117,19 @@ function similarity(a, b) {
 // 수학·과학은 숫자만 바꾸므로 기준을 높게, 국어·영어·사회는 예문·자료가 바뀌므로 낮게
 const MIN_SIM = { math: 0.55, science: 0.45, korean: 0.3, english: 0.3, social: 0.35 };
 
+// 베꼈는지는 숫자까지 그대로 비교 (숫자만 바꾼 문제는 통과)
+const same = (a, b) => String(a).replace(/\s+/g, "") === String(b).replace(/\s+/g, "");
+const fullText = (p) => [p.question, ...(p.parts || []).map((q) => q.question)].join(" ");
 function isSameType(p, o, subject) {
   if (!o) return true;
   if (p.type !== o.type) return false;
+  if (o.type === "multi") {
+    if (p.parts.length !== o.parts.length || p.parts.some((q, i) => q.type !== o.parts[i].type)) return false;
+    if (same(fullText(p), fullText(o)) && same(JSON.stringify(p.parts.map((q) => q.choices)), JSON.stringify(o.parts.map((q) => q.choices)))) return false; // 그대로 베낌
+    return similarity(fullText(p), fullText(o)) >= (MIN_SIM[subject] ?? 0.4);
+  }
   if (o.type === "choice" && p.choices.length !== o.choices.length) return false;
-  if (shape(p.question) === shape(o.question) && JSON.stringify(p.choices) === JSON.stringify(o.choices)) return false; // 그대로 베낌
+  if (same(p.question, o.question) && JSON.stringify(p.choices) === JSON.stringify(o.choices)) return false; // 그대로 베낌
   return similarity(p.question, o.question) >= (MIN_SIM[subject] ?? 0.4);
 }
 
@@ -106,7 +138,7 @@ function isSameType(p, o, subject) {
  * 원래 문제와 너무 다르면 버리고 한 번 더 만든다.
  */
 export async function sameTypeProblems({ original, subject, grade, unit, seen = [], count = 3, easierFirst = false }) {
-  const o = { type: original.type, question: original.question, choices: original.choices, answer: original.answer, accept: original.accept };
+  const o = { type: original.type, question: original.question, choices: original.choices, answer: original.answer, accept: original.accept, parts: original.parts };
   const out = [];
   let feedback = "";
   for (let attempt = 0; attempt < 2 && out.length < count; attempt++) {
@@ -125,7 +157,9 @@ ${SAME_TYPE}
 ${FORMAT_HELP}
 ${STYLE}
 
-JSON 형식: {"problems":[{"type":"${o.type}","question":"","choices":[],"answer":0,"accept":[],"explanation":"","changed":""}]}`;
+JSON 형식: {"problems":[${o.type === "multi"
+    ? `{"type":"multi","question":"","parts":[${o.parts.map((q) => `{"label":"${q.label}","type":"${q.type}","question":"","choices":[],"answer":${q.type === "choice" ? 0 : '""'},"accept":[],"explanation":""}`).join(",")}],"explanation":"","changed":""}`
+    : `{"type":"${o.type}","question":"","choices":[],"answer":0,"accept":[],"explanation":"","changed":""}`}]}`;
     const data = await run([prompt]);
     const fresh = cleanList(data.problems).filter((p) => !out.some((x) => x.question === p.question) && !seen.includes(p.question));
     const good = fresh.filter((p) => isSameType(p, original, subject));
@@ -172,6 +206,7 @@ ${STYLE}
 JSON 형식:
 {"readable":true,
  "original":{"type":"choice","question":"","choices":["","","","",""],"answer":0,"accept":[],"explanation":"","hasFigure":false,"figureBox":null},
+ (소문항이 여러 개면 original은 {"type":"multi","question":"공통 지문","parts":[…],"explanation":"","hasFigure":false,"figureBox":null})
  "unit":"","chapter":"",
  "concept":{"title":"","summary":"","points":[""],"tip":""},
  "bankUnitId":null}`;
@@ -187,8 +222,8 @@ JSON 형식:
   return {
     original,
     // 예전 화면 호환용 글자 정보
-    problemText: original.question + (original.choices ? "\n" + original.choices.map((c, i) => `${"①②③④⑤"[i]} ${c}`).join("\n") : ""),
-    correctAnswer: (original.type === "choice" ? `${"①②③④⑤"[original.answer]} ${original.choices[original.answer]}` : original.answer) + (original.explanation ? `\n${original.explanation}` : ""),
+    problemText: problemTextOf(original),
+    correctAnswer: correctAnswerOf(original),
     unit,
     chapter: String(data.chapter || data.unit || ""),
     concept: {
