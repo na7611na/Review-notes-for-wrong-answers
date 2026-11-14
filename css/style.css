@@ -486,3 +486,8 @@ body.print-mode .warn { max-width: 210mm; margin: 12px auto 0; }
 .pv-choices.short { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* 시험지 화면 가독성 */
 .exam-item .q-text, .question .q-text { line-height: 1.85; }
+
+/* 정답·해설지만 인쇄할 때 */
+.p-answers.alone { break-before: auto; page-break-before: auto; margin-top: 4mm; border-top: 0; padding-top: 0; }
+.p-ans-title { font-size: .9em; color: #555; font-weight: 600; text-align: right; }
+.print-bar .seg button { padding: 8px 12px; }
